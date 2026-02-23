@@ -8,9 +8,15 @@ from rich.table import Table
 
 from crawler import LinkCrawler
 from database import DeadLinkDatabase
+from replacement_engine import ReplacementEngine
 
-app = typer.Typer(help="Self-healing link verification crawler.")
+app = typer.Typer(help="Self-healing link verification crawler.", no_args_is_help=True)
 console = Console()
+
+
+@app.callback()
+def root() -> None:
+    """CLI for self-healing link verification."""
 
 
 def build_progress_table(url: str, status_code: Union[int, str], dead_count: int) -> Table:
@@ -22,8 +28,16 @@ def build_progress_table(url: str, status_code: Union[int, str], dead_count: int
     return table
 
 
-@app.command()
-def run(
+def build_replacement_progress_table(dead_url: str, suggestion_count: int) -> Table:
+    table = Table(title="Replacement Engine Progress")
+    table.add_column("Dead URL being processed", style="cyan", overflow="fold")
+    table.add_column("Suggestions found", style="green")
+    table.add_row(dead_url, str(suggestion_count))
+    return table
+
+
+@app.command("crawl")
+def crawl(
     target: str = typer.Argument(..., help="Website URL or sitemap.xml URL"),
     db_path: str = typer.Option("dead_links.db", help="SQLite database path"),
     output_csv: str = typer.Option("dead_links.csv", help="Output CSV file path"),
@@ -58,6 +72,65 @@ def run(
 
     database.export_to_csv(output_csv)
     console.print(f"\n[green]Done.[/green] Dead links found: {dead_count}")
+    console.print(f"Database: {db_path}")
+    console.print(f"CSV export: {output_csv}")
+
+
+@app.command("replace")
+def replace(
+    db_path: str = typer.Option("dead_links.db", help="SQLite database path"),
+    output_csv: str = typer.Option(
+        "replacement_suggestions.csv",
+        help="Output CSV file path for replacement suggestions",
+    ),
+    limit: int = typer.Option(200, help="Maximum number of dead links to process"),
+    top_k: int = typer.Option(3, min=1, help="Top candidate suggestions to keep per dead link"),
+    min_similarity: float = typer.Option(
+        0.03,
+        min=0.0,
+        max=1.0,
+        help="Minimum semantic similarity threshold (0.0-1.0)",
+    ),
+) -> None:
+    """Run Stage 2 replacement engine using Wayback + semantic matching."""
+
+    database = DeadLinkDatabase(db_path=db_path)
+    dead_links = database.get_dead_links(limit=limit)
+    if not dead_links:
+        console.print("[yellow]No dead links found in database. Run crawl first.[/yellow]")
+        raise typer.Exit(code=0)
+
+    engine = ReplacementEngine(
+        database=database,
+        min_similarity=min_similarity,
+        top_k_per_link=top_k,
+    )
+
+    async def runner() -> int:
+        current_table = build_replacement_progress_table("Starting...", 0)
+
+        async def progress_callback(dead_url: str, suggestion_count: int) -> None:
+            nonlocal current_table
+            current_table = build_replacement_progress_table(dead_url, suggestion_count)
+
+        with Live(current_table, console=console, refresh_per_second=8) as live:
+            async def live_progress_callback(dead_url: str, suggestion_count: int) -> None:
+                await progress_callback(dead_url, suggestion_count)
+                live.update(current_table)
+
+            return await engine.generate_replacements(
+                dead_links=dead_links,
+                progress_callback=live_progress_callback,
+            )
+
+    try:
+        suggestion_count = asyncio.run(runner())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Replacement engine interrupted by user.[/yellow]")
+        raise typer.Exit(code=130)
+
+    database.export_replacements_to_csv(output_csv)
+    console.print(f"\n[green]Done.[/green] Suggestions found: {suggestion_count}")
     console.print(f"Database: {db_path}")
     console.print(f"CSV export: {output_csv}")
 

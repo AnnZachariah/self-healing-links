@@ -1,0 +1,11 @@
+id,source_page,dead_url,anchor_text,suggested_url,wayback_snapshot_url,similarity_score,match_reason,generated_at
+1,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/,,0.0421,wayback+semantic-match,2026-02-23T19:02:17.058595+00:00
+2,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/?q=Health%20%26%20fitness,,0.0421,wayback+semantic-match,2026-02-23T19:02:17.130194+00:00
+3,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/?q=%26,,0.0421,wayback+semantic-match,2026-02-23T19:02:17.136138+00:00
+4,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/?curius=2922,,0.0421,wayback+semantic-match,2026-02-23T19:02:17.140137+00:00
+5,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/?q=%26data,,0.0421,wayback+semantic-match,2026-02-23T19:02:17.145139+00:00
+6,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/about/,,0.5074,wayback+semantic-match,2026-02-23T19:04:58.867705+00:00
+7,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/about/guide.html,,0.4064,wayback+semantic-match,2026-02-23T19:04:58.884897+00:00
+8,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,http://wiby.me/about/pp.html,,0.4064,wayback+semantic-match,2026-02-23T19:04:58.893728+00:00
+9,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,https://wiby.me/about.html,,0.3775,wayback+semantic-match,2026-02-23T19:04:58.902719+00:00
+10,https://wiby.me/about/guide.html,https://wiby.me/about/url_that_was_submitted,url_that_was_submitted,http://wiby.me/about/pp.org.html,,0.376,wayback+semantic-match,2026-02-23T19:04:58.911059+00:00
