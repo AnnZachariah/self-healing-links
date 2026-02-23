@@ -1,0 +1,5 @@
+typer
+rich
+httpx
+sqlite-utils
+beautifulsoup4
