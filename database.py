@@ -67,6 +67,22 @@ class DeadLinkDatabase:
             pk="id",
             if_not_exists=True,
         )
+        self.db["reviewer_decisions"].create(
+            {
+                "id": int,
+                "run_id": int,
+                "suggestion_id": int,
+                "dead_url": str,
+                "original_suggested_url": str,
+                "final_suggested_url": str,
+                "decision": str,
+                "reviewer_name": str,
+                "note": str,
+                "decided_at": str,
+            },
+            pk="id",
+            if_not_exists=True,
+        )
 
         self._ensure_column("dead_links", "run_id", "INTEGER")
         self._ensure_column("replacement_suggestions", "run_id", "INTEGER")
@@ -90,6 +106,15 @@ class DeadLinkDatabase:
         if row is None:
             return None
         return int(row[0])
+
+    def get_run_started_at(self, run_id: int) -> Optional[str]:
+        row = self.db.conn.execute(
+            "SELECT started_at FROM crawl_runs WHERE id = ? LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
 
     def latest_run_id_with_dead_links(self) -> Optional[int]:
         row = self.db.conn.execute(
@@ -291,6 +316,23 @@ class DeadLinkDatabase:
         columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(replacement_suggestions)").fetchall()]
         return [dict(zip(columns, row)) for row in rows]
 
+    def get_replacement_suggestion_by_id(
+        self,
+        suggestion_id: int,
+        run_id: Optional[int] = None,
+    ) -> Optional[Dict[str, object]]:
+        query = "SELECT * FROM replacement_suggestions WHERE id = ?"
+        params: List[object] = [suggestion_id]
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " LIMIT 1"
+        row = self.db.conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return None
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(replacement_suggestions)").fetchall()]
+        return dict(zip(columns, row))
+
     def insert_classification(
         self,
         suggestion_id: int,
@@ -391,6 +433,122 @@ class DeadLinkDatabase:
         rows = self.db.conn.execute(query, tuple(params)).fetchall()
         columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(replacement_classifications)").fetchall()]
         return [dict(zip(columns, row)) for row in rows]
+
+    def get_classification_by_id(
+        self,
+        classification_id: int,
+        run_id: Optional[int] = None,
+    ) -> Optional[Dict[str, object]]:
+        query = "SELECT * FROM replacement_classifications WHERE id = ?"
+        params: List[object] = [classification_id]
+        if run_id is not None:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " LIMIT 1"
+        row = self.db.conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return None
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(replacement_classifications)").fetchall()]
+        return dict(zip(columns, row))
+
+    def upsert_reviewer_decision(
+        self,
+        run_id: int,
+        suggestion_id: int,
+        dead_url: str,
+        original_suggested_url: str,
+        final_suggested_url: str,
+        decision: str,
+        reviewer_name: str,
+        note: str,
+    ) -> None:
+        existing = self.db.conn.execute(
+            """
+            SELECT id
+            FROM reviewer_decisions
+            WHERE run_id = ? AND suggestion_id = ?
+            LIMIT 1
+            """,
+            (run_id, suggestion_id),
+        ).fetchone()
+
+        now = datetime.now(timezone.utc).isoformat()
+        if existing is not None:
+            self.db.conn.execute(
+                """
+                UPDATE reviewer_decisions
+                SET dead_url = ?,
+                    original_suggested_url = ?,
+                    final_suggested_url = ?,
+                    decision = ?,
+                    reviewer_name = ?,
+                    note = ?,
+                    decided_at = ?
+                WHERE id = ?
+                """,
+                (
+                    dead_url,
+                    original_suggested_url,
+                    final_suggested_url,
+                    decision,
+                    reviewer_name,
+                    note,
+                    now,
+                    existing[0],
+                ),
+            )
+            self.db.conn.commit()
+            return
+
+        self.db["reviewer_decisions"].insert(
+            {
+                "run_id": run_id,
+                "suggestion_id": suggestion_id,
+                "dead_url": dead_url,
+                "original_suggested_url": original_suggested_url,
+                "final_suggested_url": final_suggested_url,
+                "decision": decision,
+                "reviewer_name": reviewer_name,
+                "note": note,
+                "decided_at": now,
+            }
+        )
+
+    def get_reviewer_decisions(
+        self,
+        run_id: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, object]]:
+        query = "SELECT * FROM reviewer_decisions"
+        params: List[object] = []
+        if run_id is not None:
+            query += " WHERE run_id = ?"
+            params.append(run_id)
+        query += " ORDER BY decided_at DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self.db.conn.execute(query, tuple(params)).fetchall()
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(reviewer_decisions)").fetchall()]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def get_reviewer_decision_by_suggestion(
+        self,
+        run_id: int,
+        suggestion_id: int,
+    ) -> Optional[Dict[str, object]]:
+        row = self.db.conn.execute(
+            """
+            SELECT * FROM reviewer_decisions
+            WHERE run_id = ? AND suggestion_id = ?
+            LIMIT 1
+            """,
+            (run_id, suggestion_id),
+        ).fetchone()
+        if row is None:
+            return None
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(reviewer_decisions)").fetchall()]
+        return dict(zip(columns, row))
 
     def get_auto_replacements(
         self,

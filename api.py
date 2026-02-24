@@ -35,6 +35,16 @@ class ClassifyRequest(BaseModel):
     run_id: int = 0
 
 
+class ReviewDecisionRequest(BaseModel):
+    run_id: int = Field(..., ge=1)
+    suggestion_id: int = Field(..., ge=1)
+    decision: str
+    reviewer_name: str = ""
+    note: str = ""
+    final_suggested_url: str = ""
+    db_path: str = "dead_links.db"
+
+
 app = FastAPI(title="Self-Healing Links API")
 app.mount("/web", StaticFiles(directory="web"), name="web")
 
@@ -48,6 +58,7 @@ def home() -> FileResponse:
 def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=db_path)
     resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+    run_started_at = database.get_run_started_at(resolved_run_id) if resolved_run_id > 0 else None
 
     dead_links = database.get_dead_links(limit=500, run_id=resolved_run_id if resolved_run_id > 0 else None)
     suggestions = database.get_replacement_suggestions(
@@ -58,19 +69,28 @@ def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, An
         limit=500,
         run_id=resolved_run_id if resolved_run_id > 0 else None,
     )
+    reviewer_decisions = database.get_reviewer_decisions(
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+        limit=500,
+    )
 
     return {
         "run_id": resolved_run_id,
+        "run_started_at": run_started_at,
         "stats": {
             "dead_links": len(dead_links),
             "suggestions": len(suggestions),
             "classifications": len(classifications),
             "auto_replace": sum(1 for row in classifications if row.get("decision") == "auto_replace"),
             "manual_review": sum(1 for row in classifications if row.get("decision") == "manual_review"),
+            "review_approved": sum(1 for row in reviewer_decisions if row.get("decision") == "approved"),
+            "review_rejected": sum(1 for row in reviewer_decisions if row.get("decision") == "rejected"),
+            "review_edited": sum(1 for row in reviewer_decisions if row.get("decision") == "edited"),
         },
         "dead_links": dead_links,
         "replacement_suggestions": suggestions,
         "replacement_classifications": classifications,
+        "reviewer_decisions": reviewer_decisions,
     }
 
 
@@ -78,6 +98,7 @@ def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, An
 async def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
     run_id = database.create_run(payload.target)
+    run_started_at = database.get_run_started_at(run_id)
     crawler = LinkCrawler(database=database, max_depth=2, concurrency=10, run_id=run_id)
 
     try:
@@ -89,6 +110,7 @@ async def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
     return {
         "message": "crawl_complete",
         "run_id": run_id,
+        "run_started_at": run_started_at,
         "dead_links_found": dead_count,
         "db_path": payload.db_path,
         "csv": payload.output_csv,
@@ -99,6 +121,7 @@ async def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
 async def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
     resolved_run_id = payload.run_id if payload.run_id > 0 else (database.latest_run_id_with_dead_links() or 0)
+    run_started_at = database.get_run_started_at(resolved_run_id) if resolved_run_id > 0 else None
     dead_links = database.get_dead_links(
         limit=payload.limit,
         run_id=resolved_run_id if resolved_run_id > 0 else None,
@@ -123,6 +146,7 @@ async def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
     return {
         "message": "replace_complete",
         "run_id": resolved_run_id,
+        "run_started_at": run_started_at,
         "suggestions_found": suggestion_count,
         "db_path": payload.db_path,
         "csv": payload.output_csv,
@@ -133,6 +157,7 @@ async def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
 async def run_classify(payload: ClassifyRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
     resolved_run_id = payload.run_id if payload.run_id > 0 else (database.latest_run_id_with_suggestions() or 0)
+    run_started_at = database.get_run_started_at(resolved_run_id) if resolved_run_id > 0 else None
     suggestions = database.get_replacement_suggestions(
         limit=payload.limit,
         min_similarity=payload.min_similarity,
@@ -154,9 +179,98 @@ async def run_classify(payload: ClassifyRequest) -> Dict[str, Any]:
     return {
         "message": "classify_complete",
         "run_id": resolved_run_id,
+        "run_started_at": run_started_at,
         "classified": classified_count,
         "auto_replace": auto_count,
         "manual_review": classified_count - auto_count,
         "db_path": payload.db_path,
         "csv": payload.output_csv,
+    }
+
+
+@app.get("/api/explain/suggestion/{suggestion_id}")
+def explain_suggestion(
+    suggestion_id: int,
+    db_path: str = "dead_links.db",
+    run_id: int = 0,
+) -> Dict[str, Any]:
+    database = DeadLinkDatabase(db_path=db_path)
+    resolved_run_id = run_id if run_id > 0 else None
+    suggestion = database.get_replacement_suggestion_by_id(suggestion_id, run_id=resolved_run_id)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail=f"Suggestion not found: id={suggestion_id}")
+
+    classifier = SelfHealingClassifier(database=database)
+    explanation = classifier.explain_suggestion(suggestion)
+    explanation["suggestion_id"] = suggestion_id
+    explanation["run_id"] = suggestion.get("run_id")
+    return explanation
+
+
+@app.get("/api/explain/classification/{classification_id}")
+def explain_classification(
+    classification_id: int,
+    db_path: str = "dead_links.db",
+    run_id: int = 0,
+) -> Dict[str, Any]:
+    database = DeadLinkDatabase(db_path=db_path)
+    resolved_run_id = run_id if run_id > 0 else None
+    classification = database.get_classification_by_id(classification_id, run_id=resolved_run_id)
+    if classification is None:
+        raise HTTPException(status_code=404, detail=f"Classification not found: id={classification_id}")
+
+    suggestion_id = int(classification.get("suggestion_id", 0))
+    suggestion = database.get_replacement_suggestion_by_id(suggestion_id, run_id=resolved_run_id)
+    if suggestion is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Suggestion not found for classification id={classification_id}, suggestion_id={suggestion_id}",
+        )
+
+    classifier = SelfHealingClassifier(database=database)
+    explanation = classifier.explain_suggestion(suggestion)
+    explanation["classification_id"] = classification_id
+    explanation["suggestion_id"] = suggestion_id
+    explanation["run_id"] = suggestion.get("run_id")
+    return explanation
+
+
+@app.post("/api/review/decision")
+def save_review_decision(payload: ReviewDecisionRequest) -> Dict[str, Any]:
+    database = DeadLinkDatabase(db_path=payload.db_path)
+    run_id = payload.run_id
+    suggestion_id = payload.suggestion_id
+
+    suggestion = database.get_replacement_suggestion_by_id(suggestion_id, run_id=run_id)
+    if suggestion is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Suggestion not found for run_id={run_id}, suggestion_id={suggestion_id}",
+        )
+
+    decision = payload.decision.strip().lower()
+    if decision not in {"approved", "rejected", "edited"}:
+        raise HTTPException(status_code=400, detail="Decision must be one of: approved, rejected, edited")
+
+    original_suggested_url = str(suggestion.get("suggested_url", ""))
+    final_suggested_url = payload.final_suggested_url.strip() or original_suggested_url
+
+    database.upsert_reviewer_decision(
+        run_id=run_id,
+        suggestion_id=suggestion_id,
+        dead_url=str(suggestion.get("dead_url", "")),
+        original_suggested_url=original_suggested_url,
+        final_suggested_url=final_suggested_url,
+        decision=decision,
+        reviewer_name=payload.reviewer_name.strip(),
+        note=payload.note.strip(),
+    )
+
+    saved = database.get_reviewer_decision_by_suggestion(run_id=run_id, suggestion_id=suggestion_id)
+    return {
+        "message": "review_decision_saved",
+        "run_id": run_id,
+        "suggestion_id": suggestion_id,
+        "decision": decision,
+        "record": saved,
     }

@@ -29,8 +29,19 @@
       margin: 0 auto;
       padding: 20px;
     }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .topbar-right {
+      text-align: right;
+      min-width: 260px;
+    }
     h1 {
-      margin: 0 0 14px;
+      margin: 0;
       font-size: 34px;
       letter-spacing: 0.3px;
     }
@@ -79,17 +90,18 @@
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 10px;
-      margin: 12px 0 16px;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin: 10px 0 14px;
     }
     .stat {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
+      border-radius: 8px;
+      padding: 7px 8px;
+      font-size: 12px;
     }
-    .stat b { display: block; font-size: 22px; margin-top: 3px; }
+    .stat b { display: block; font-size: 18px; margin-top: 2px; }
     .tables {
       display: grid;
       gap: 14px;
@@ -110,6 +122,9 @@
       vertical-align: top;
     }
     th { background: #eef5f5; }
+    tr.clickable-row:hover td {
+      background: rgba(12, 124, 132, 0.12);
+    }
     .status {
       margin-bottom: 12px;
       min-height: 21px;
@@ -128,15 +143,27 @@
       font-size: 12px;
       border: 1px solid rgba(0, 0, 0, 0.08);
     }
+    @media (max-width: 760px) {
+      .topbar {
+        flex-direction: column;
+      }
+      .topbar-right {
+        text-align: left;
+        min-width: 0;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Self-Healing Links</h1>
-    <div class="muted">Run crawl, replacement, and classification from one UI.</div>
-    <div class="muted">Current run: <b id="run-id">none</b></div>
-
-    <div id="status" class="status muted">Ready.</div>
+    <div class="topbar">
+      <h1>Self-Healing Links</h1>
+      <div class="topbar-right">
+        <div class="muted">Run crawl, replacement, and classification from one UI.</div>
+        <div class="muted">Latest scan: <b id="scan-label">none</b></div>
+        <div id="status" class="status muted">Ready.</div>
+      </div>
+    </div>
 
     <div class="grid">
       <div class="card">
@@ -171,6 +198,9 @@
       <div class="stat">Classifications<b id="stat-classifications">0</b></div>
       <div class="stat">Auto Replace<b id="stat-auto">0</b></div>
       <div class="stat">Manual Review<b id="stat-manual">0</b></div>
+      <div class="stat">Approved<b id="stat-approved">0</b></div>
+      <div class="stat">Rejected<b id="stat-rejected">0</b></div>
+      <div class="stat">Edited<b id="stat-edited">0</b></div>
     </div>
 
     <div class="tables">
@@ -186,15 +216,75 @@
         <h3>Classifications</h3>
         <table id="classify-table"></table>
       </div>
+      <div>
+        <h3>Reviewer Decisions</h3>
+        <table id="review-table"></table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <h2>Explainability Panel</h2>
+      <div class="muted">Click a row in Replacement Suggestions or Classifications to inspect why it scored high/low.</div>
+      <div id="explain-summary" style="margin-top:10px;font-size:13px;" class="muted">No row selected.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:10px;">
+        <div>
+          <h3 style="margin:4px 0;">Top Feature Contributions</h3>
+          <table id="explain-contrib-table"></table>
+        </div>
+        <div>
+          <h3 style="margin:4px 0;">Matched Tokens</h3>
+          <div id="explain-tokens" class="muted" style="font-size:13px;line-height:1.5;"></div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:10px;">
+        <div>
+          <label>Reviewer Name</label>
+          <input id="reviewer-name" placeholder="e.g. Ann" />
+        </div>
+        <div>
+          <label>Final Suggested URL (for edited)</label>
+          <input id="review-final-url" placeholder="https://..." />
+        </div>
+      </div>
+      <label>Review Note</label>
+      <input id="review-note" placeholder="Optional note" />
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="btn-approve">Approve</button>
+        <button id="btn-reject" class="secondary">Reject</button>
+        <button id="btn-edit" class="secondary">Mark Edited</button>
+      </div>
     </div>
   </div>
 
   <script>
     let currentRunId = 0;
+    let currentRunStartedAt = "";
+    let selectedSuggestionId = 0;
+    let selectedDeadUrl = "";
+    let selectedSuggestedUrl = "";
     const statusEl = document.getElementById("status");
     const setStatus = (text, cls = "muted") => {
       statusEl.textContent = text;
       statusEl.className = `status ${cls}`;
+    };
+
+    const updateScanLabel = () => {
+      const el = document.getElementById("scan-label");
+      if (currentRunStartedAt) {
+        const dt = new Date(currentRunStartedAt);
+        if (!Number.isNaN(dt.getTime())) {
+          const label = dt.toLocaleString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "2-digit",
+            hour: "numeric",
+            minute: "2-digit"
+          });
+          el.textContent = label;
+          return;
+        }
+      }
+      el.textContent = currentRunId > 0 ? `Run ${currentRunId}` : "none";
     };
 
     const renderTable = (tableId, rows, keys) => {
@@ -212,6 +302,10 @@
         const rowShade = scoreKey
           ? ` style="background:${rowGradient(index, rows.length)}"`
           : "";
+        const clickAttr = tableId === "suggest-table"
+          ? ` data-suggestion-id="${row.id}"`
+          : (tableId === "classify-table" ? ` data-classification-id="${row.id}"` : "");
+        const clickClass = clickAttr ? " class=\"clickable-row\"" : "";
         const cells = columns.map(k => {
           if (k === scoreKey) {
             const raw = Number(row[k] ?? 0);
@@ -220,9 +314,28 @@
           }
           return `<td>${String(row[k] ?? "")}</td>`;
         }).join("");
-        return `<tr${rowShade}>${cells}</tr>`;
+        return `<tr${clickClass}${clickAttr}${rowShade}>${cells}</tr>`;
       }).join("");
       table.innerHTML = head + body;
+
+      if (tableId === "suggest-table" || tableId === "classify-table") {
+        table.querySelectorAll("tr.clickable-row").forEach((tr) => {
+          tr.style.cursor = "pointer";
+          tr.addEventListener("click", async () => {
+            try {
+              if (tableId === "suggest-table") {
+                const id = Number(tr.getAttribute("data-suggestion-id") || 0);
+                if (id > 0) await loadExplanation("suggestion", id);
+              } else {
+                const id = Number(tr.getAttribute("data-classification-id") || 0);
+                if (id > 0) await loadExplanation("classification", id);
+              }
+            } catch (error) {
+              setStatus(error.message || "Failed to load explanation", "err");
+            }
+          });
+        });
+      }
     };
 
     const scoreColor = (score) => {
@@ -244,17 +357,93 @@
       if (!res.ok) throw new Error("Failed to load results");
       const data = await res.json();
       currentRunId = Number(data.run_id || currentRunId || 0);
-      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      currentRunStartedAt = String(data.run_started_at || currentRunStartedAt || "");
+      updateScanLabel();
 
       document.getElementById("stat-dead").textContent = data.stats.dead_links;
       document.getElementById("stat-suggestions").textContent = data.stats.suggestions;
       document.getElementById("stat-classifications").textContent = data.stats.classifications;
       document.getElementById("stat-auto").textContent = data.stats.auto_replace;
       document.getElementById("stat-manual").textContent = data.stats.manual_review;
+      document.getElementById("stat-approved").textContent = data.stats.review_approved;
+      document.getElementById("stat-rejected").textContent = data.stats.review_rejected;
+      document.getElementById("stat-edited").textContent = data.stats.review_edited;
 
-      renderTable("dead-table", data.dead_links, ["id", "source_page", "dead_url", "status_code"]);
-      renderTable("suggest-table", data.replacement_suggestions, ["id", "dead_url", "suggested_url", "similarity_score"]);
-      renderTable("classify-table", data.replacement_classifications, ["id", "suggested_url", "confidence_score", "decision"]);
+      renderTable("dead-table", data.dead_links, ["source_page", "dead_url", "status_code"]);
+      renderTable("suggest-table", data.replacement_suggestions, ["dead_url", "suggested_url", "similarity_score"]);
+      renderTable("classify-table", data.replacement_classifications, ["suggested_url", "confidence_score", "decision"]);
+      renderTable("review-table", data.reviewer_decisions, ["suggestion_id", "decision", "reviewer_name", "final_suggested_url", "decided_at"]);
+    };
+
+    const loadExplanation = async (kind, id) => {
+      const query = currentRunId > 0 ? `?run_id=${currentRunId}` : "";
+      const path = kind === "suggestion"
+        ? `/api/explain/suggestion/${id}${query}`
+        : `/api/explain/classification/${id}${query}`;
+      const res = await fetch(path);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to load explanation");
+      }
+      renderExplanation(data);
+      setStatus(`Explanation loaded for ${kind} ${id}.`, "ok");
+    };
+
+    const renderExplanation = (data) => {
+      const summary = document.getElementById("explain-summary");
+      summary.className = "";
+      summary.innerHTML = `
+        <b>Dead URL:</b> ${escapeHtml(data.dead_url || "")}<br>
+        <b>Suggested URL:</b> ${escapeHtml(data.suggested_url || "")}<br>
+        <b>Similarity:</b> ${(Number(data.similarity_score || 0)).toFixed(4)} |
+        <b>Confidence:</b> ${(Number(data.confidence_score || 0)).toFixed(4)} |
+        <b>Level:</b> ${escapeHtml(data.decision_level || "")}
+      `;
+      selectedSuggestionId = Number(data.suggestion_id || 0);
+      selectedDeadUrl = String(data.dead_url || "");
+      selectedSuggestedUrl = String(data.suggested_url || "");
+      document.getElementById("review-final-url").value = selectedSuggestedUrl;
+
+      const contribRows = (data.contributions || []).slice(0, 8);
+      renderTable("explain-contrib-table", contribRows, ["feature", "value", "weight", "impact"]);
+
+      const tm = data.token_matches || {};
+      document.getElementById("explain-tokens").innerHTML = `
+        <b>Shared path tokens:</b> ${escapeHtml((tm.shared_path_tokens || []).join(", ") || "-")}<br>
+        <b>Dead path tokens:</b> ${escapeHtml((tm.dead_path_tokens || []).join(", ") || "-")}<br>
+        <b>Suggested path tokens:</b> ${escapeHtml((tm.suggested_path_tokens || []).join(", ") || "-")}<br>
+        <b>Anchor/suggested overlap:</b> ${escapeHtml((tm.anchor_suggested_overlap || []).join(", ") || "-")}
+      `;
+    };
+
+    const escapeHtml = (text) => String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;")
+      .replaceAll("'", "&#039;");
+
+    const saveReviewerDecision = async (decision) => {
+      if (currentRunId <= 0) {
+        throw new Error("No active run selected.");
+      }
+      if (selectedSuggestionId <= 0) {
+        throw new Error("Select a suggestion/classification row first.");
+      }
+      const reviewer_name = document.getElementById("reviewer-name").value.trim();
+      const note = document.getElementById("review-note").value.trim();
+      const final_suggested_url = document.getElementById("review-final-url").value.trim() || selectedSuggestedUrl;
+      const payload = {
+        run_id: currentRunId,
+        suggestion_id: selectedSuggestionId,
+        decision,
+        reviewer_name,
+        note,
+        final_suggested_url
+      };
+      await postJSON("/api/review/decision", payload);
+      setStatus(`Reviewer decision saved: ${decision} for suggestion ${selectedSuggestionId}`, "ok");
+      await fetchResults();
     };
 
     const postJSON = async (url, payload) => {
@@ -287,7 +476,8 @@
       const target = document.getElementById("crawl-target").value.trim();
       const data = await postJSON("/api/crawl", { target });
       currentRunId = Number(data.run_id || 0);
-      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      currentRunStartedAt = String(data.run_started_at || "");
+      updateScanLabel();
       setStatus(`Crawl complete (run ${currentRunId}). Dead links found: ${data.dead_links_found}. Click Show Results.`, "ok");
     }));
 
@@ -297,7 +487,8 @@
       const min_similarity = Number(document.getElementById("replace-minsim").value);
       const data = await postJSON("/api/replace", { top_k, min_similarity, run_id: currentRunId });
       currentRunId = Number(data.run_id || currentRunId || 0);
-      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      currentRunStartedAt = String(data.run_started_at || currentRunStartedAt || "");
+      updateScanLabel();
       setStatus(`Replace complete (run ${currentRunId}). Suggestions found: ${data.suggestions_found}. Click Show Results.`, "ok");
     }));
 
@@ -306,7 +497,8 @@
       const auto_threshold = Number(document.getElementById("classify-threshold").value);
       const data = await postJSON("/api/classify", { auto_threshold, run_id: currentRunId });
       currentRunId = Number(data.run_id || currentRunId || 0);
-      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      currentRunStartedAt = String(data.run_started_at || currentRunStartedAt || "");
+      updateScanLabel();
       setStatus(`Classify complete (run ${currentRunId}). Auto: ${data.auto_replace}, Manual: ${data.manual_review}. Click Show Results.`, "ok");
     }));
 
@@ -319,6 +511,18 @@
         setStatus(error.message, "err");
       }
     });
+
+    document.getElementById("btn-approve").addEventListener("click", () => withBusy("btn-approve", async () => {
+      await saveReviewerDecision("approved");
+    }));
+
+    document.getElementById("btn-reject").addEventListener("click", () => withBusy("btn-reject", async () => {
+      await saveReviewerDecision("rejected");
+    }));
+
+    document.getElementById("btn-edit").addEventListener("click", () => withBusy("btn-edit", async () => {
+      await saveReviewerDecision("edited");
+    }));
   </script>
 </body>
 </html>

@@ -19,6 +19,11 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 - Uses a feature-based logistic confidence model (calibrated probabilities)
 - Stores classifications in SQLite and exports to CSV
 
+## Reviewer Decisions
+- Reviewers can mark each suggestion as `approved`, `rejected`, or `edited`
+- Tracks reviewer name, note, and decision timestamp
+- Stores final edited URL when decision is `edited`
+
 ## Usage
 - pip install -r requirements.txt
 - python main.py crawl https://yoursite.com
@@ -36,6 +41,8 @@ Run isolation:
 - Open in browser:
   - http://127.0.0.1:8000
 - Use the UI buttons to run Stage 1, Stage 2, and Stage 3.
+- Explainability: click any row in Replacement Suggestions or Classifications to open feature contributions and token/path match details.
+- Reviewer decisions: after selecting a row, use Approve/Reject/Edit in the Explainability Panel.
 
 ## Coming Soon
 - Model training pipeline from labeled replacement decisions

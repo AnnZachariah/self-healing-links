@@ -74,6 +74,22 @@ class MLConfidenceModel:
         formatted = [f"{name}:{impact:+.3f}" for name, impact in top]
         return ",".join(formatted)
 
+    def contributions(self, features: ConfidenceFeatures) -> List[Dict[str, float]]:
+        rows: List[Dict[str, float]] = []
+        for feature_name, weight in self.weights.items():
+            value = getattr(features, feature_name)
+            impact = value * weight
+            rows.append(
+                {
+                    "feature": feature_name,
+                    "value": round(float(value), 6),
+                    "weight": round(float(weight), 6),
+                    "impact": round(float(impact), 6),
+                }
+            )
+        rows.sort(key=lambda item: abs(item["impact"]), reverse=True)
+        return rows
+
     def _sigmoid(self, value: float) -> float:
         # numerically stable sigmoid
         if value >= 0:
@@ -213,3 +229,57 @@ class SelfHealingClassifier:
         if not tokens_a or not tokens_b:
             return 0.0
         return len(tokens_a.intersection(tokens_b)) / len(tokens_a.union(tokens_b))
+
+    def explain_suggestion(self, row: Dict[str, object]) -> Dict[str, object]:
+        dead_url = str(row.get("dead_url", ""))
+        suggested_url = str(row.get("suggested_url", ""))
+        anchor_text = str(row.get("anchor_text", ""))
+        similarity_score = float(row.get("similarity_score", 0.0))
+
+        features = self._build_features(
+            dead_url=dead_url,
+            suggested_url=suggested_url,
+            anchor_text=anchor_text,
+            similarity_score=similarity_score,
+        )
+        confidence_score = self.model.predict_proba(features)
+        contributions = self.model.contributions(features)
+
+        dead_path = urlparse(dead_url).path
+        suggested_path = urlparse(suggested_url).path
+        dead_tokens = sorted(set(re.findall(r"[a-z0-9]{2,}", dead_path.lower())))
+        suggested_tokens = sorted(set(re.findall(r"[a-z0-9]{2,}", suggested_path.lower())))
+        shared_tokens = sorted(set(dead_tokens).intersection(suggested_tokens))
+
+        anchor_tokens = sorted(set(re.findall(r"[a-z0-9]{2,}", anchor_text.lower())))
+        anchor_overlap = sorted(set(anchor_tokens).intersection(set(suggested_tokens)))
+
+        level = "high" if confidence_score >= self.auto_threshold else "low"
+
+        return {
+            "dead_url": dead_url,
+            "suggested_url": suggested_url,
+            "similarity_score": round(similarity_score, 6),
+            "confidence_score": round(confidence_score, 6),
+            "decision_level": level,
+            "features": {
+                "similarity_score": round(features.similarity_score, 6),
+                "same_host": round(features.same_host, 6),
+                "https_url": round(features.https_url, 6),
+                "path_prefix_ratio": round(features.path_prefix_ratio, 6),
+                "path_token_jaccard": round(features.path_token_jaccard, 6),
+                "anchor_path_overlap": round(features.anchor_path_overlap, 6),
+                "query_penalty": round(features.query_penalty, 6),
+                "root_penalty": round(features.root_penalty, 6),
+                "depth_delta": round(features.depth_delta, 6),
+                "length_similarity": round(features.length_similarity, 6),
+            },
+            "contributions": contributions,
+            "token_matches": {
+                "dead_path_tokens": dead_tokens,
+                "suggested_path_tokens": suggested_tokens,
+                "shared_path_tokens": shared_tokens,
+                "anchor_tokens": anchor_tokens,
+                "anchor_suggested_overlap": anchor_overlap,
+            },
+        }
