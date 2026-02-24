@@ -8,6 +8,7 @@ from rich.table import Table
 
 from crawler import LinkCrawler
 from database import DeadLinkDatabase
+from classifier import SelfHealingClassifier
 from replacement_engine import ReplacementEngine
 
 app = typer.Typer(help="Self-healing link verification crawler.", no_args_is_help=True)
@@ -33,6 +34,15 @@ def build_replacement_progress_table(dead_url: str, suggestion_count: int) -> Ta
     table.add_column("Dead URL being processed", style="cyan", overflow="fold")
     table.add_column("Suggestions found", style="green")
     table.add_row(dead_url, str(suggestion_count))
+    return table
+
+
+def build_classification_progress_table(suggested_url: str, classified_count: int, auto_count: int) -> Table:
+    table = Table(title="Classifier Progress")
+    table.add_column("Suggested URL", style="cyan", overflow="fold")
+    table.add_column("Classified rows", style="magenta")
+    table.add_column("Auto-replace", style="green")
+    table.add_row(suggested_url, str(classified_count), str(auto_count))
     return table
 
 
@@ -131,6 +141,72 @@ def replace(
 
     database.export_replacements_to_csv(output_csv)
     console.print(f"\n[green]Done.[/green] Suggestions found: {suggestion_count}")
+    console.print(f"Database: {db_path}")
+    console.print(f"CSV export: {output_csv}")
+
+
+@app.command("classify")
+def classify(
+    db_path: str = typer.Option("dead_links.db", help="SQLite database path"),
+    output_csv: str = typer.Option(
+        "replacement_classifications.csv",
+        help="Output CSV path for classification results",
+    ),
+    limit: int = typer.Option(500, help="Maximum replacement suggestions to classify"),
+    min_similarity: float = typer.Option(
+        0.0,
+        min=0.0,
+        max=1.0,
+        help="Optional minimum similarity filter before classification",
+    ),
+    auto_threshold: float = typer.Option(
+        0.75,
+        min=0.0,
+        max=1.0,
+        help="Confidence threshold for auto replacement",
+    ),
+) -> None:
+    """Run Stage 3 confidence classifier (auto vs manual replacement)."""
+
+    database = DeadLinkDatabase(db_path=db_path)
+    suggestions = database.get_replacement_suggestions(limit=limit, min_similarity=min_similarity)
+    if not suggestions:
+        console.print("[yellow]No replacement suggestions found. Run replace first.[/yellow]")
+        raise typer.Exit(code=0)
+
+    classifier = SelfHealingClassifier(database=database, auto_threshold=auto_threshold)
+
+    async def runner() -> tuple:
+        current_table = build_classification_progress_table("Starting...", 0, 0)
+
+        async def progress_callback(suggested_url: str, classified_count: int, auto_count: int) -> None:
+            nonlocal current_table
+            current_table = build_classification_progress_table(
+                suggested_url=suggested_url,
+                classified_count=classified_count,
+                auto_count=auto_count,
+            )
+
+        with Live(current_table, console=console, refresh_per_second=8) as live:
+            async def live_progress_callback(suggested_url: str, classified_count: int, auto_count: int) -> None:
+                await progress_callback(suggested_url, classified_count, auto_count)
+                live.update(current_table)
+
+            classified_count, auto_count = await classifier.classify(
+                suggestions=suggestions,
+                progress_callback=live_progress_callback,
+            )
+            return classified_count, auto_count
+
+    try:
+        classified_count, auto_count = asyncio.run(runner())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Classification interrupted by user.[/yellow]")
+        raise typer.Exit(code=130)
+
+    database.export_classifications_to_csv(output_csv)
+    console.print(f"\n[green]Done.[/green] Suggestions classified: {classified_count}")
+    console.print(f"Auto-replace candidates: {auto_count}")
     console.print(f"Database: {db_path}")
     console.print(f"CSV export: {output_csv}")
 

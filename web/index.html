@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Self-Healing Links</title>
+  <style>
+    :root {
+      --bg: #f6f3ef;
+      --panel: #ffffff;
+      --ink: #132022;
+      --muted: #4b5d63;
+      --accent: #0c7c84;
+      --accent-2: #e8762b;
+      --line: #d9dfde;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Arial", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 10%, #ccebe5 0%, transparent 30%),
+        radial-gradient(circle at 92% 20%, #ffe7d6 0%, transparent 34%),
+        var(--bg);
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      margin: 0 0 14px;
+      font-size: 34px;
+      letter-spacing: 0.3px;
+    }
+    .muted { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      margin: 8px 0 4px;
+      color: var(--muted);
+    }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    button {
+      margin-top: 10px;
+      border: 0;
+      border-radius: 9px;
+      padding: 10px 12px;
+      font-size: 14px;
+      color: #fff;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    button.secondary { background: var(--accent-2); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin: 12px 0 16px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .stat b { display: block; font-size: 22px; margin-top: 3px; }
+    .tables {
+      display: grid;
+      gap: 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 9px;
+      text-align: left;
+      font-size: 13px;
+      vertical-align: top;
+    }
+    th { background: #eef5f5; }
+    .status {
+      margin-bottom: 12px;
+      min-height: 21px;
+      font-weight: 600;
+    }
+    .ok { color: #0b7a3f; }
+    .err { color: #b03828; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Self-Healing Links</h1>
+    <div class="muted">Run crawl, replacement, and classification from one UI.</div>
+
+    <div id="status" class="status muted">Ready.</div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Stage 1: Crawl</h2>
+        <label>Target URL or sitemap</label>
+        <input id="crawl-target" value="https://wiby.me" />
+        <button id="btn-crawl">Run Crawl</button>
+      </div>
+
+      <div class="card">
+        <h2>Stage 2: Replace</h2>
+        <label>Top K per link</label>
+        <input id="replace-topk" type="number" value="5" min="1" />
+        <label>Min similarity</label>
+        <input id="replace-minsim" type="number" value="0.05" min="0" max="1" step="0.01" />
+        <button id="btn-replace" class="secondary">Run Replace</button>
+      </div>
+
+      <div class="card">
+        <h2>Stage 3: Classify</h2>
+        <label>Auto threshold</label>
+        <input id="classify-threshold" type="number" value="0.75" min="0" max="1" step="0.01" />
+        <button id="btn-classify">Run Classify</button>
+      </div>
+    </div>
+
+    <button id="btn-refresh" class="secondary">Refresh Results</button>
+
+    <div class="stats">
+      <div class="stat">Dead Links<b id="stat-dead">0</b></div>
+      <div class="stat">Suggestions<b id="stat-suggestions">0</b></div>
+      <div class="stat">Classifications<b id="stat-classifications">0</b></div>
+      <div class="stat">Auto Replace<b id="stat-auto">0</b></div>
+      <div class="stat">Manual Review<b id="stat-manual">0</b></div>
+    </div>
+
+    <div class="tables">
+      <div>
+        <h3>Dead Links</h3>
+        <table id="dead-table"></table>
+      </div>
+      <div>
+        <h3>Replacement Suggestions</h3>
+        <table id="suggest-table"></table>
+      </div>
+      <div>
+        <h3>Classifications</h3>
+        <table id="classify-table"></table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const setStatus = (text, cls = "muted") => {
+      statusEl.textContent = text;
+      statusEl.className = `status ${cls}`;
+    };
+
+    const renderTable = (tableId, rows, keys) => {
+      const table = document.getElementById(tableId);
+      if (!rows || rows.length === 0) {
+        table.innerHTML = "<tr><td class='muted'>No data</td></tr>";
+        return;
+      }
+      const columns = keys || Object.keys(rows[0]);
+      const head = `<tr>${columns.map(k => `<th>${k}</th>`).join("")}</tr>`;
+      const body = rows.map(row => `<tr>${columns.map(k => `<td>${String(row[k] ?? "")}</td>`).join("")}</tr>`).join("");
+      table.innerHTML = head + body;
+    };
+
+    const fetchResults = async () => {
+      const res = await fetch("/api/results");
+      if (!res.ok) throw new Error("Failed to load results");
+      const data = await res.json();
+
+      document.getElementById("stat-dead").textContent = data.stats.dead_links;
+      document.getElementById("stat-suggestions").textContent = data.stats.suggestions;
+      document.getElementById("stat-classifications").textContent = data.stats.classifications;
+      document.getElementById("stat-auto").textContent = data.stats.auto_replace;
+      document.getElementById("stat-manual").textContent = data.stats.manual_review;
+
+      renderTable("dead-table", data.dead_links, ["id", "source_page", "dead_url", "status_code"]);
+      renderTable("suggest-table", data.replacement_suggestions, ["id", "dead_url", "suggested_url", "similarity_score"]);
+      renderTable("classify-table", data.replacement_classifications, ["id", "suggested_url", "confidence_score", "decision"]);
+    };
+
+    const postJSON = async (url, payload) => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Request failed");
+      }
+      return data;
+    };
+
+    const withBusy = async (buttonId, fn) => {
+      const btn = document.getElementById(buttonId);
+      btn.disabled = true;
+      try {
+        await fn();
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    document.getElementById("btn-crawl").addEventListener("click", () => withBusy("btn-crawl", async () => {
+      setStatus("Running crawl...", "muted");
+      const target = document.getElementById("crawl-target").value.trim();
+      const data = await postJSON("/api/crawl", { target });
+      setStatus(`Crawl complete. Dead links found: ${data.dead_links_found}`, "ok");
+      await fetchResults();
+    }));
+
+    document.getElementById("btn-replace").addEventListener("click", () => withBusy("btn-replace", async () => {
+      setStatus("Running replacement engine...", "muted");
+      const top_k = Number(document.getElementById("replace-topk").value);
+      const min_similarity = Number(document.getElementById("replace-minsim").value);
+      const data = await postJSON("/api/replace", { top_k, min_similarity });
+      setStatus(`Replace complete. Suggestions found: ${data.suggestions_found}`, "ok");
+      await fetchResults();
+    }));
+
+    document.getElementById("btn-classify").addEventListener("click", () => withBusy("btn-classify", async () => {
+      setStatus("Running classifier...", "muted");
+      const auto_threshold = Number(document.getElementById("classify-threshold").value);
+      const data = await postJSON("/api/classify", { auto_threshold });
+      setStatus(`Classify complete. Auto: ${data.auto_replace}, Manual: ${data.manual_review}`, "ok");
+      await fetchResults();
+    }));
+
+    document.getElementById("btn-refresh").addEventListener("click", async () => {
+      try {
+        setStatus("Refreshing results...", "muted");
+        await fetchResults();
+        setStatus("Results refreshed.", "ok");
+      } catch (error) {
+        setStatus(error.message, "err");
+      }
+    });
+
+    (async () => {
+      try {
+        await fetchResults();
+      } catch (error) {
+        setStatus(error.message, "err");
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -3,3 +3,5 @@ rich
 httpx
 sqlite-utils
 beautifulsoup4
+fastapi
+uvicorn

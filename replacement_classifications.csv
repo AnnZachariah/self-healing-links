@@ -1,0 +1,11 @@
+id,suggestion_id,dead_url,suggested_url,similarity_score,confidence_score,decision,rationale,classified_at
+1,6,https://wiby.me/about/url_that_was_submitted,https://wiby.me/about/,0.5074,0.7674,manual_review,"base_similarity=0.5074,same_host,https,path_prefix+0.05,path_overlap+0.03",2026-02-24T06:08:08.767514+00:00
+2,7,https://wiby.me/about/url_that_was_submitted,https://wiby.me/about/guide.html,0.4064,0.6578,manual_review,"base_similarity=0.4064,same_host,https,path_prefix+0.05,path_overlap+0.02",2026-02-24T06:08:08.792470+00:00
+3,8,https://wiby.me/about/url_that_was_submitted,http://wiby.me/about/pp.html,0.4064,0.6278,manual_review,"base_similarity=0.4064,same_host,path_prefix+0.05,path_overlap+0.02",2026-02-24T06:08:08.802512+00:00
+4,9,https://wiby.me/about/url_that_was_submitted,https://wiby.me/about.html,0.3775,0.5825,manual_review,"base_similarity=0.3775,same_host,https,path_overlap+0.02",2026-02-24T06:08:08.808531+00:00
+5,10,https://wiby.me/about/url_that_was_submitted,http://wiby.me/about/pp.org.html,0.376,0.5948,manual_review,"base_similarity=0.3760,same_host,path_prefix+0.05,path_overlap+0.02",2026-02-24T06:08:08.816475+00:00
+6,1,https://wiby.me/about/url_that_was_submitted,https://wiby.me/,0.0421,0.1721,manual_review,"base_similarity=0.0421,same_host,https,root_path_penalty",2026-02-24T06:08:08.822471+00:00
+7,2,https://wiby.me/about/url_that_was_submitted,https://wiby.me/?q=Health%20%26%20fitness,0.0421,0.0721,manual_review,"base_similarity=0.0421,same_host,https,query_penalty,root_path_penalty",2026-02-24T06:08:08.829470+00:00
+8,3,https://wiby.me/about/url_that_was_submitted,https://wiby.me/?q=%26,0.0421,0.0721,manual_review,"base_similarity=0.0421,same_host,https,query_penalty,root_path_penalty",2026-02-24T06:08:08.834468+00:00
+9,4,https://wiby.me/about/url_that_was_submitted,https://wiby.me/?curius=2922,0.0421,0.0721,manual_review,"base_similarity=0.0421,same_host,https,query_penalty,root_path_penalty",2026-02-24T06:08:08.840473+00:00
+10,5,https://wiby.me/about/url_that_was_submitted,https://wiby.me/?q=%26data,0.0421,0.0721,manual_review,"base_similarity=0.0421,same_host,https,query_penalty,root_path_penalty",2026-02-24T06:08:08.845471+00:00
