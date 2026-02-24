@@ -31,6 +31,7 @@ class LinkCrawler:
         max_depth: int = 2,
         concurrency: int = 10,
         timeout_seconds: float = 10.0,
+        run_id: Optional[int] = None,
     ) -> None:
         self.database = database
         self.max_depth = max_depth
@@ -38,6 +39,7 @@ class LinkCrawler:
         self.timeout = httpx.Timeout(timeout_seconds)
         self.dead_count = 0
         self.status_cache: Dict[str, StatusValue] = {}
+        self.run_id = run_id
 
     async def crawl(
         self,
@@ -168,6 +170,7 @@ class LinkCrawler:
                 surrounding_context=link.surrounding_context,
                 status_code=str(status),
                 discovered_at=datetime.now(timezone.utc).isoformat(),
+                run_id=self.run_id,
             )
             if progress_callback is not None:
                 await progress_callback(link.dead_url, status, self.dead_count)

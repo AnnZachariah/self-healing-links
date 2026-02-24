@@ -19,6 +19,70 @@ class ClassifiedSuggestion:
     rationale: str
 
 
+@dataclass
+class ConfidenceFeatures:
+    similarity_score: float
+    same_host: float
+    https_url: float
+    path_prefix_ratio: float
+    path_token_jaccard: float
+    anchor_path_overlap: float
+    query_penalty: float
+    root_penalty: float
+    depth_delta: float
+    length_similarity: float
+
+
+class MLConfidenceModel:
+    """
+    Lightweight feature-based logistic model.
+    This behaves like a calibrated classifier without external ML dependencies.
+    """
+
+    def __init__(self) -> None:
+        self.bias = -1.05
+        self.weights = {
+            "similarity_score": 3.0,
+            "same_host": 1.1,
+            "https_url": 0.35,
+            "path_prefix_ratio": 1.55,
+            "path_token_jaccard": 1.45,
+            "anchor_path_overlap": 1.2,
+            "query_penalty": -1.15,
+            "root_penalty": -0.8,
+            "depth_delta": -0.95,
+            "length_similarity": 0.85,
+        }
+        self.temperature = 1.1
+
+    def predict_proba(self, features: ConfidenceFeatures) -> float:
+        logit = self.bias
+        for feature_name, weight in self.weights.items():
+            logit += getattr(features, feature_name) * weight
+        calibrated = logit / self.temperature
+        return self._sigmoid(calibrated)
+
+    def explain(self, features: ConfidenceFeatures) -> str:
+        contributions: List[tuple] = []
+        for feature_name, weight in self.weights.items():
+            value = getattr(features, feature_name)
+            impact = value * weight
+            contributions.append((feature_name, impact))
+
+        contributions.sort(key=lambda item: abs(item[1]), reverse=True)
+        top = contributions[:4]
+        formatted = [f"{name}:{impact:+.3f}" for name, impact in top]
+        return ",".join(formatted)
+
+    def _sigmoid(self, value: float) -> float:
+        # numerically stable sigmoid
+        if value >= 0:
+            z = pow(2.718281828, -value)
+            return 1 / (1 + z)
+        z = pow(2.718281828, value)
+        return z / (1 + z)
+
+
 class SelfHealingClassifier:
     """Stage 3: classify replacement suggestions for auto vs manual handling."""
 
@@ -29,11 +93,13 @@ class SelfHealingClassifier:
     ) -> None:
         self.database = database
         self.auto_threshold = auto_threshold
+        self.model = MLConfidenceModel()
 
     async def classify(
         self,
         suggestions: Sequence[Dict[str, object]],
         progress_callback: Optional[ClassificationProgressCallback] = None,
+        run_id: Optional[int] = None,
     ) -> tuple:
         classified_count = 0
         auto_count = 0
@@ -48,6 +114,7 @@ class SelfHealingClassifier:
                 confidence_score=classified.confidence_score,
                 decision=classified.decision,
                 rationale=classified.rationale,
+                run_id=run_id,
             )
             classified_count += 1
             if classified.decision == "auto_replace":
@@ -62,9 +129,17 @@ class SelfHealingClassifier:
         suggestion_id = int(row.get("id", 0))
         dead_url = str(row.get("dead_url", ""))
         suggested_url = str(row.get("suggested_url", ""))
+        anchor_text = str(row.get("anchor_text", ""))
         similarity_score = float(row.get("similarity_score", 0.0))
 
-        confidence_score, rationale = self._confidence(dead_url, suggested_url, similarity_score)
+        features = self._build_features(
+            dead_url=dead_url,
+            suggested_url=suggested_url,
+            anchor_text=anchor_text,
+            similarity_score=similarity_score,
+        )
+        confidence_score = self.model.predict_proba(features)
+        rationale = self.model.explain(features)
         decision = "auto_replace" if confidence_score >= self.auto_threshold else "manual_review"
 
         return ClassifiedSuggestion(
@@ -77,44 +152,50 @@ class SelfHealingClassifier:
             rationale=rationale,
         )
 
-    def _confidence(self, dead_url: str, suggested_url: str, similarity_score: float) -> tuple:
+    def _build_features(
+        self,
+        dead_url: str,
+        suggested_url: str,
+        anchor_text: str,
+        similarity_score: float,
+    ) -> ConfidenceFeatures:
         dead_parsed = urlparse(dead_url)
         suggested_parsed = urlparse(suggested_url)
 
-        score = similarity_score
-        reasons: List[str] = [f"base_similarity={similarity_score:.4f}"]
-
-        same_host = dead_parsed.netloc == suggested_parsed.netloc and dead_parsed.netloc != ""
-        if same_host:
-            score += 0.15
-            reasons.append("same_host")
-
-        if suggested_parsed.scheme == "https":
-            score += 0.03
-            reasons.append("https")
+        dead_parts = [p for p in dead_parsed.path.split("/") if p]
+        suggested_parts = [p for p in suggested_parsed.path.split("/") if p]
 
         shared_prefix = self._shared_prefix_tokens(dead_parsed.path, suggested_parsed.path)
-        if shared_prefix > 0:
-            path_bonus = min(0.2, 0.05 * shared_prefix)
-            score += path_bonus
-            reasons.append(f"path_prefix+{path_bonus:.2f}")
+        max_depth = max(1, len(dead_parts), len(suggested_parts))
+        path_prefix_ratio = shared_prefix / max_depth
+        path_token_jaccard = self._token_overlap(dead_parsed.path, suggested_parsed.path)
 
-        overlap = self._token_overlap(dead_parsed.path, suggested_parsed.path)
-        if overlap > 0:
-            overlap_bonus = min(0.15, overlap * 0.15)
-            score += overlap_bonus
-            reasons.append(f"path_overlap+{overlap_bonus:.2f}")
+        anchor_tokens = set(re.findall(r"[a-z0-9]{2,}", anchor_text.lower()))
+        suggested_tokens = set(re.findall(r"[a-z0-9]{2,}", suggested_parsed.path.lower()))
+        anchor_path_overlap = 0.0
+        if anchor_tokens and suggested_tokens:
+            anchor_path_overlap = len(anchor_tokens.intersection(suggested_tokens)) / len(anchor_tokens)
 
-        if suggested_parsed.query:
-            score -= 0.1
-            reasons.append("query_penalty")
+        query_penalty = min(1.0, len(suggested_parsed.query) / 40) if suggested_parsed.query else 0.0
+        root_penalty = 1.0 if suggested_parsed.path in {"", "/"} else 0.0
+        depth_delta = abs(len(dead_parts) - len(suggested_parts)) / max_depth
 
-        if suggested_parsed.path in {"", "/"}:
-            score -= 0.05
-            reasons.append("root_path_penalty")
+        dead_length = len(dead_parsed.path or "/")
+        suggested_length = len(suggested_parsed.path or "/")
+        length_similarity = 1 - min(1.0, abs(dead_length - suggested_length) / max(1, dead_length))
 
-        score = max(0.0, min(1.0, score))
-        return score, ",".join(reasons)
+        return ConfidenceFeatures(
+            similarity_score=max(0.0, min(1.0, similarity_score)),
+            same_host=1.0 if dead_parsed.netloc and dead_parsed.netloc == suggested_parsed.netloc else 0.0,
+            https_url=1.0 if suggested_parsed.scheme == "https" else 0.0,
+            path_prefix_ratio=max(0.0, min(1.0, path_prefix_ratio)),
+            path_token_jaccard=max(0.0, min(1.0, path_token_jaccard)),
+            anchor_path_overlap=max(0.0, min(1.0, anchor_path_overlap)),
+            query_penalty=max(0.0, min(1.0, query_penalty)),
+            root_penalty=root_penalty,
+            depth_delta=max(0.0, min(1.0, depth_delta)),
+            length_similarity=max(0.0, min(1.0, length_similarity)),
+        )
 
     def _shared_prefix_tokens(self, a: str, b: str) -> int:
         parts_a = [p for p in a.split("/") if p]

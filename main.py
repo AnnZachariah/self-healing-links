@@ -55,7 +55,8 @@ def crawl(
     """Run Stage 1 crawler + dead link detector."""
 
     database = DeadLinkDatabase(db_path=db_path)
-    crawler = LinkCrawler(database=database, max_depth=2, concurrency=10)
+    run_id = database.create_run(target)
+    crawler = LinkCrawler(database=database, max_depth=2, concurrency=10, run_id=run_id)
 
     async def runner() -> int:
         current_table = build_progress_table("Starting...", "-", 0)
@@ -82,6 +83,7 @@ def crawl(
 
     database.export_to_csv(output_csv)
     console.print(f"\n[green]Done.[/green] Dead links found: {dead_count}")
+    console.print(f"Run ID: {run_id}")
     console.print(f"Database: {db_path}")
     console.print(f"CSV export: {output_csv}")
 
@@ -101,11 +103,16 @@ def replace(
         max=1.0,
         help="Minimum semantic similarity threshold (0.0-1.0)",
     ),
+    run_id: int = typer.Option(0, help="Run ID to process (0 means latest run)"),
 ) -> None:
     """Run Stage 2 replacement engine using Wayback + semantic matching."""
 
     database = DeadLinkDatabase(db_path=db_path)
-    dead_links = database.get_dead_links(limit=limit)
+    resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+    dead_links = database.get_dead_links(
+        limit=limit,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
     if not dead_links:
         console.print("[yellow]No dead links found in database. Run crawl first.[/yellow]")
         raise typer.Exit(code=0)
@@ -131,6 +138,7 @@ def replace(
             return await engine.generate_replacements(
                 dead_links=dead_links,
                 progress_callback=live_progress_callback,
+                run_id=resolved_run_id if resolved_run_id > 0 else None,
             )
 
     try:
@@ -141,6 +149,7 @@ def replace(
 
     database.export_replacements_to_csv(output_csv)
     console.print(f"\n[green]Done.[/green] Suggestions found: {suggestion_count}")
+    console.print(f"Run ID: {resolved_run_id}")
     console.print(f"Database: {db_path}")
     console.print(f"CSV export: {output_csv}")
 
@@ -165,11 +174,17 @@ def classify(
         max=1.0,
         help="Confidence threshold for auto replacement",
     ),
+    run_id: int = typer.Option(0, help="Run ID to process (0 means latest run)"),
 ) -> None:
     """Run Stage 3 confidence classifier (auto vs manual replacement)."""
 
     database = DeadLinkDatabase(db_path=db_path)
-    suggestions = database.get_replacement_suggestions(limit=limit, min_similarity=min_similarity)
+    resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+    suggestions = database.get_replacement_suggestions(
+        limit=limit,
+        min_similarity=min_similarity,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
     if not suggestions:
         console.print("[yellow]No replacement suggestions found. Run replace first.[/yellow]")
         raise typer.Exit(code=0)
@@ -195,6 +210,7 @@ def classify(
             classified_count, auto_count = await classifier.classify(
                 suggestions=suggestions,
                 progress_callback=live_progress_callback,
+                run_id=resolved_run_id if resolved_run_id > 0 else None,
             )
             return classified_count, auto_count
 
@@ -207,6 +223,7 @@ def classify(
     database.export_classifications_to_csv(output_csv)
     console.print(f"\n[green]Done.[/green] Suggestions classified: {classified_count}")
     console.print(f"Auto-replace candidates: {auto_count}")
+    console.print(f"Run ID: {resolved_run_id}")
     console.print(f"Database: {db_path}")
     console.print(f"CSV export: {output_csv}")
 

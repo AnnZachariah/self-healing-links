@@ -117,12 +117,24 @@
     }
     .ok { color: #0b7a3f; }
     .err { color: #b03828; }
+    .score-pill {
+      display: inline-block;
+      min-width: 66px;
+      text-align: center;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: #102022;
+      font-weight: 700;
+      font-size: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Self-Healing Links</h1>
     <div class="muted">Run crawl, replacement, and classification from one UI.</div>
+    <div class="muted">Current run: <b id="run-id">none</b></div>
 
     <div id="status" class="status muted">Ready.</div>
 
@@ -151,7 +163,7 @@
       </div>
     </div>
 
-    <button id="btn-refresh" class="secondary">Refresh Results</button>
+    <button id="btn-refresh" class="secondary">Show Results</button>
 
     <div class="stats">
       <div class="stat">Dead Links<b id="stat-dead">0</b></div>
@@ -178,6 +190,7 @@
   </div>
 
   <script>
+    let currentRunId = 0;
     const statusEl = document.getElementById("status");
     const setStatus = (text, cls = "muted") => {
       statusEl.textContent = text;
@@ -192,14 +205,46 @@
       }
       const columns = keys || Object.keys(rows[0]);
       const head = `<tr>${columns.map(k => `<th>${k}</th>`).join("")}</tr>`;
-      const body = rows.map(row => `<tr>${columns.map(k => `<td>${String(row[k] ?? "")}</td>`).join("")}</tr>`).join("");
+      const scoreKey = columns.includes("confidence_score")
+        ? "confidence_score"
+        : (columns.includes("similarity_score") ? "similarity_score" : null);
+      const body = rows.map((row, index) => {
+        const rowShade = scoreKey
+          ? ` style="background:${rowGradient(index, rows.length)}"`
+          : "";
+        const cells = columns.map(k => {
+          if (k === scoreKey) {
+            const raw = Number(row[k] ?? 0);
+            const score = Number.isFinite(raw) ? raw : 0;
+            return `<td><span class="score-pill" style="background:${scoreColor(score)}">${score.toFixed(4)}</span></td>`;
+          }
+          return `<td>${String(row[k] ?? "")}</td>`;
+        }).join("");
+        return `<tr${rowShade}>${cells}</tr>`;
+      }).join("");
       table.innerHTML = head + body;
     };
 
+    const scoreColor = (score) => {
+      const clamped = Math.max(0, Math.min(1, Number(score) || 0));
+      const hue = Math.round(clamped * 120); // 0=red, 120=green
+      return `hsl(${hue}, 72%, 78%)`;
+    };
+
+    const rowGradient = (index, total) => {
+      if (total <= 1) return "rgba(11, 122, 63, 0.08)";
+      const t = 1 - index / (total - 1); // top row = 1, bottom = 0
+      const hue = Math.round(t * 120);
+      return `hsla(${hue}, 72%, 84%, 0.26)`;
+    };
+
     const fetchResults = async () => {
-      const res = await fetch("/api/results");
+      const query = currentRunId > 0 ? `?run_id=${currentRunId}` : "";
+      const res = await fetch(`/api/results${query}`);
       if (!res.ok) throw new Error("Failed to load results");
       const data = await res.json();
+      currentRunId = Number(data.run_id || currentRunId || 0);
+      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
 
       document.getElementById("stat-dead").textContent = data.stats.dead_links;
       document.getElementById("stat-suggestions").textContent = data.stats.suggestions;
@@ -230,6 +275,8 @@
       btn.disabled = true;
       try {
         await fn();
+      } catch (error) {
+        setStatus(error.message || "Request failed", "err");
       } finally {
         btn.disabled = false;
       }
@@ -239,44 +286,39 @@
       setStatus("Running crawl...", "muted");
       const target = document.getElementById("crawl-target").value.trim();
       const data = await postJSON("/api/crawl", { target });
-      setStatus(`Crawl complete. Dead links found: ${data.dead_links_found}`, "ok");
-      await fetchResults();
+      currentRunId = Number(data.run_id || 0);
+      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      setStatus(`Crawl complete (run ${currentRunId}). Dead links found: ${data.dead_links_found}. Click Show Results.`, "ok");
     }));
 
     document.getElementById("btn-replace").addEventListener("click", () => withBusy("btn-replace", async () => {
       setStatus("Running replacement engine...", "muted");
       const top_k = Number(document.getElementById("replace-topk").value);
       const min_similarity = Number(document.getElementById("replace-minsim").value);
-      const data = await postJSON("/api/replace", { top_k, min_similarity });
-      setStatus(`Replace complete. Suggestions found: ${data.suggestions_found}`, "ok");
-      await fetchResults();
+      const data = await postJSON("/api/replace", { top_k, min_similarity, run_id: currentRunId });
+      currentRunId = Number(data.run_id || currentRunId || 0);
+      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      setStatus(`Replace complete (run ${currentRunId}). Suggestions found: ${data.suggestions_found}. Click Show Results.`, "ok");
     }));
 
     document.getElementById("btn-classify").addEventListener("click", () => withBusy("btn-classify", async () => {
       setStatus("Running classifier...", "muted");
       const auto_threshold = Number(document.getElementById("classify-threshold").value);
-      const data = await postJSON("/api/classify", { auto_threshold });
-      setStatus(`Classify complete. Auto: ${data.auto_replace}, Manual: ${data.manual_review}`, "ok");
-      await fetchResults();
+      const data = await postJSON("/api/classify", { auto_threshold, run_id: currentRunId });
+      currentRunId = Number(data.run_id || currentRunId || 0);
+      document.getElementById("run-id").textContent = currentRunId > 0 ? String(currentRunId) : "none";
+      setStatus(`Classify complete (run ${currentRunId}). Auto: ${data.auto_replace}, Manual: ${data.manual_review}. Click Show Results.`, "ok");
     }));
 
     document.getElementById("btn-refresh").addEventListener("click", async () => {
       try {
-        setStatus("Refreshing results...", "muted");
+        setStatus("Loading results...", "muted");
         await fetchResults();
-        setStatus("Results refreshed.", "ok");
+        setStatus("Results loaded.", "ok");
       } catch (error) {
         setStatus(error.message, "err");
       }
     });
-
-    (async () => {
-      try {
-        await fetchResults();
-      } catch (error) {
-        setStatus(error.message, "err");
-      }
-    })();
   </script>
 </body>
 </html>

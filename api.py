@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
@@ -24,6 +23,7 @@ class ReplaceRequest(BaseModel):
     limit: int = Field(default=200, ge=1)
     top_k: int = Field(default=3, ge=1)
     min_similarity: float = Field(default=0.03, ge=0.0, le=1.0)
+    run_id: int = 0
 
 
 class ClassifyRequest(BaseModel):
@@ -32,6 +32,7 @@ class ClassifyRequest(BaseModel):
     limit: int = Field(default=500, ge=1)
     min_similarity: float = Field(default=0.0, ge=0.0, le=1.0)
     auto_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    run_id: int = 0
 
 
 app = FastAPI(title="Self-Healing Links API")
@@ -44,13 +45,22 @@ def home() -> FileResponse:
 
 
 @app.get("/api/results")
-def get_results(db_path: str = "dead_links.db") -> Dict[str, Any]:
+def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=db_path)
-    dead_links = database.get_dead_links(limit=500)
-    suggestions = database.get_replacement_suggestions(limit=500)
-    classifications = database.get_classifications(limit=500)
+    resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+
+    dead_links = database.get_dead_links(limit=500, run_id=resolved_run_id if resolved_run_id > 0 else None)
+    suggestions = database.get_replacement_suggestions(
+        limit=500,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
+    classifications = database.get_classifications(
+        limit=500,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
 
     return {
+        "run_id": resolved_run_id,
         "stats": {
             "dead_links": len(dead_links),
             "suggestions": len(suggestions),
@@ -65,18 +75,20 @@ def get_results(db_path: str = "dead_links.db") -> Dict[str, Any]:
 
 
 @app.post("/api/crawl")
-def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
+async def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
-    crawler = LinkCrawler(database=database, max_depth=2, concurrency=10)
+    run_id = database.create_run(payload.target)
+    crawler = LinkCrawler(database=database, max_depth=2, concurrency=10, run_id=run_id)
 
     try:
-        dead_count = asyncio.run(crawler.crawl(payload.target))
+        dead_count = await crawler.crawl(payload.target)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     database.export_to_csv(payload.output_csv)
     return {
         "message": "crawl_complete",
+        "run_id": run_id,
         "dead_links_found": dead_count,
         "db_path": payload.db_path,
         "csv": payload.output_csv,
@@ -84,22 +96,33 @@ def run_crawl(payload: CrawlRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/replace")
-def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
+async def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
-    dead_links = database.get_dead_links(limit=payload.limit)
+    resolved_run_id = payload.run_id if payload.run_id > 0 else (database.latest_run_id_with_dead_links() or 0)
+    dead_links = database.get_dead_links(
+        limit=payload.limit,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
     if not dead_links:
-        raise HTTPException(status_code=400, detail="No dead links found. Run crawl first.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No dead links found for run_id={resolved_run_id}. Run crawl first.",
+        )
 
     engine = ReplacementEngine(
         database=database,
         min_similarity=payload.min_similarity,
         top_k_per_link=payload.top_k,
     )
-    suggestion_count = asyncio.run(engine.generate_replacements(dead_links=dead_links))
+    suggestion_count = await engine.generate_replacements(
+        dead_links=dead_links,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
     database.export_replacements_to_csv(payload.output_csv)
 
     return {
         "message": "replace_complete",
+        "run_id": resolved_run_id,
         "suggestions_found": suggestion_count,
         "db_path": payload.db_path,
         "csv": payload.output_csv,
@@ -107,21 +130,30 @@ def run_replace(payload: ReplaceRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/classify")
-def run_classify(payload: ClassifyRequest) -> Dict[str, Any]:
+async def run_classify(payload: ClassifyRequest) -> Dict[str, Any]:
     database = DeadLinkDatabase(db_path=payload.db_path)
+    resolved_run_id = payload.run_id if payload.run_id > 0 else (database.latest_run_id_with_suggestions() or 0)
     suggestions = database.get_replacement_suggestions(
         limit=payload.limit,
         min_similarity=payload.min_similarity,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
     )
     if not suggestions:
-        raise HTTPException(status_code=400, detail="No replacement suggestions found. Run replace first.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No replacement suggestions found for run_id={resolved_run_id}. Run replace first.",
+        )
 
     classifier = SelfHealingClassifier(database=database, auto_threshold=payload.auto_threshold)
-    classified_count, auto_count = asyncio.run(classifier.classify(suggestions=suggestions))
+    classified_count, auto_count = await classifier.classify(
+        suggestions=suggestions,
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+    )
     database.export_classifications_to_csv(payload.output_csv)
 
     return {
         "message": "classify_complete",
+        "run_id": resolved_run_id,
         "classified": classified_count,
         "auto_replace": auto_count,
         "manual_review": classified_count - auto_count,

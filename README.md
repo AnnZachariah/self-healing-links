@@ -16,7 +16,7 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 
 ## Stage 3: Confidence Classifier (Initial)
 - Classifies replacement suggestions into `auto_replace` or `manual_review`
-- Uses a confidence score from similarity + URL/path quality heuristics
+- Uses a feature-based logistic confidence model (calibrated probabilities)
 - Stores classifications in SQLite and exports to CSV
 
 ## Usage
@@ -26,12 +26,16 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 - python main.py replace --top-k 5 --min-similarity 0.01
 - python main.py classify --auto-threshold 0.75
 
+Run isolation:
+- Each crawl creates a `run_id`.
+- Replace/Classify default to the latest run (or pass `--run-id` explicitly).
+
 ## Web App
 - Start API + frontend server:
   - uvicorn api:app --reload
 - Open in browser:
   - http://127.0.0.1:8000
-- Use the UI buttons to run Stage 1, Stage 2, and Stage 3 and inspect outputs.
+- Use the UI buttons to run Stage 1, Stage 2, and Stage 3.
 
 ## Coming Soon
-- Calibrated ML confidence model (beyond heuristic scoring)
+- Model training pipeline from labeled replacement decisions

@@ -44,6 +44,7 @@ class ReplacementEngine:
         self,
         dead_links: Sequence[Dict[str, str]],
         progress_callback: Optional[SuggestionProgressCallback] = None,
+        run_id: Optional[int] = None,
     ) -> int:
         suggestion_count = 0
         async with httpx.AsyncClient(follow_redirects=True, timeout=self.timeout) as client:
@@ -62,6 +63,7 @@ class ReplacementEngine:
                     wayback_snapshot_url=suggestion.wayback_snapshot_url,
                     similarity_score=suggestion.similarity_score,
                     match_reason=suggestion.match_reason,
+                    run_id=run_id,
                 )
                 suggestion_count += 1
                 if progress_callback is not None:
