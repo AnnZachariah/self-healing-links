@@ -15,10 +15,10 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 - Stores suggestions in SQLite and exports to CSV
 
 ## Usage
-pip install -r requirements.txt
-python main.py crawl https://yoursite.com
-python main.py replace
-python main.py replace --top-k 5 --min-similarity 0.01
+- pip install -r requirements.txt
+- python main.py crawl https://yoursite.com
+- python main.py replace
+- python main.py replace --top-k 5 --min-similarity 0.01
 
 ## Coming Soon
 - Stage 3: Confidence classifier for auto vs manual replacement
