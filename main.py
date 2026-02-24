@@ -228,5 +228,40 @@ def classify(
     console.print(f"CSV export: {output_csv}")
 
 
+@app.command("apply-approved")
+def apply_approved(
+    db_path: str = typer.Option("dead_links.db", help="SQLite database path"),
+    run_id: int = typer.Option(0, help="Run ID to process (0 means latest run)"),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--live",
+        help="Dry-run logs intended changes without production writes.",
+    ),
+    connector: str = typer.Option("none", help="Connector name for logging (e.g. contentful, git)"),
+    limit: int = typer.Option(500, min=1, help="Maximum approved decisions to process"),
+) -> None:
+    """Apply approved reviewer decisions (step 1: execution logging)."""
+    database = DeadLinkDatabase(db_path=db_path)
+    resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+    if resolved_run_id <= 0:
+        console.print("[yellow]No run found. Run crawl first.[/yellow]")
+        raise typer.Exit(code=0)
+
+    summary = database.apply_approved_replacements(
+        run_id=resolved_run_id,
+        dry_run=dry_run,
+        connector=connector,
+        limit=limit,
+    )
+    console.print("\n[green]Done.[/green] Approved replacement execution complete.")
+    console.print(f"Run ID: {resolved_run_id}")
+    console.print(f"Mode: {'dry-run' if dry_run else 'live (no connector apply yet)'}")
+    console.print(f"Processed: {summary['processed']}")
+    console.print(f"Dry-run logged: {summary['dry_run']}")
+    console.print(f"Applied: {summary['applied']}")
+    console.print(f"Skipped: {summary['skipped']}")
+    console.print(f"Failed: {summary['failed']}")
+
+
 if __name__ == "__main__":
     app()

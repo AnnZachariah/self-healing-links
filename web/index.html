@@ -187,6 +187,7 @@
         <label>Auto threshold</label>
         <input id="classify-threshold" type="number" value="0.75" min="0" max="1" step="0.01" />
         <button id="btn-classify">Run Classify</button>
+        <button id="btn-apply-approved" class="secondary">Apply Approved (Dry Run)</button>
       </div>
     </div>
 
@@ -201,6 +202,7 @@
       <div class="stat">Approved<b id="stat-approved">0</b></div>
       <div class="stat">Rejected<b id="stat-rejected">0</b></div>
       <div class="stat">Edited<b id="stat-edited">0</b></div>
+      <div class="stat">Apply Logs<b id="stat-apply">0</b></div>
     </div>
 
     <div class="tables">
@@ -219,6 +221,10 @@
       <div>
         <h3>Reviewer Decisions</h3>
         <table id="review-table"></table>
+      </div>
+      <div>
+        <h3>Applied Replacements</h3>
+        <table id="apply-table"></table>
       </div>
     </div>
 
@@ -368,11 +374,13 @@
       document.getElementById("stat-approved").textContent = data.stats.review_approved;
       document.getElementById("stat-rejected").textContent = data.stats.review_rejected;
       document.getElementById("stat-edited").textContent = data.stats.review_edited;
+      document.getElementById("stat-apply").textContent = data.stats.apply_processed;
 
       renderTable("dead-table", data.dead_links, ["source_page", "dead_url", "status_code"]);
       renderTable("suggest-table", data.replacement_suggestions, ["dead_url", "suggested_url", "similarity_score"]);
       renderTable("classify-table", data.replacement_classifications, ["suggested_url", "confidence_score", "decision"]);
       renderTable("review-table", data.reviewer_decisions, ["suggestion_id", "decision", "reviewer_name", "final_suggested_url", "decided_at"]);
+      renderTable("apply-table", data.applied_replacements, ["suggestion_id", "status", "old_url", "new_url", "connector", "applied_at"]);
     };
 
     const loadExplanation = async (kind, id) => {
@@ -500,6 +508,17 @@
       currentRunStartedAt = String(data.run_started_at || currentRunStartedAt || "");
       updateScanLabel();
       setStatus(`Classify complete (run ${currentRunId}). Auto: ${data.auto_replace}, Manual: ${data.manual_review}. Click Show Results.`, "ok");
+    }));
+
+    document.getElementById("btn-apply-approved").addEventListener("click", () => withBusy("btn-apply-approved", async () => {
+      setStatus("Applying approved replacements (dry run)...", "muted");
+      const data = await postJSON("/api/apply-approved", { run_id: currentRunId, dry_run: true, connector: "none" });
+      currentRunId = Number(data.run_id || currentRunId || 0);
+      setStatus(
+        `Apply complete (dry run). Processed: ${data.summary.processed}, Dry-run logged: ${data.summary.dry_run}, Failed: ${data.summary.failed}.`,
+        "ok"
+      );
+      await fetchResults();
     }));
 
     document.getElementById("btn-refresh").addEventListener("click", async () => {

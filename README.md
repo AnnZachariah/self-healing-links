@@ -24,12 +24,23 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 - Tracks reviewer name, note, and decision timestamp
 - Stores final edited URL when decision is `edited`
 
+## Apply Approved (Step 1)
+- Executes approved reviewer decisions in `dry-run` mode and logs each action
+- Stores execution logs in SQLite (`applied_replacements`)
+- Includes status (`dry_run`, `skipped_no_connector`, `failed`) and timestamp
+
+## Connector (Simple)
+- A connector is the bridge to your real content system (CMS/files/database).
+- Examples: WordPress API, Contentful API, Git/file updater.
+- Current default is `none`, so apply step logs actions but does not edit production content.
+
 ## Usage
 - pip install -r requirements.txt
 - python main.py crawl https://yoursite.com
 - python main.py replace
 - python main.py replace --top-k 5 --min-similarity 0.01
 - python main.py classify --auto-threshold 0.75
+- python main.py apply-approved --dry-run
 
 Run isolation:
 - Each crawl creates a `run_id`.
@@ -43,6 +54,7 @@ Run isolation:
 - Use the UI buttons to run Stage 1, Stage 2, and Stage 3.
 - Explainability: click any row in Replacement Suggestions or Classifications to open feature contributions and token/path match details.
 - Reviewer decisions: after selecting a row, use Approve/Reject/Edit in the Explainability Panel.
+- Apply approved (dry-run): use the `Apply Approved (Dry Run)` button to generate execution logs.
 
 ## Coming Soon
 - Model training pipeline from labeled replacement decisions

@@ -83,6 +83,24 @@ class DeadLinkDatabase:
             pk="id",
             if_not_exists=True,
         )
+        self.db["applied_replacements"].create(
+            {
+                "id": int,
+                "run_id": int,
+                "suggestion_id": int,
+                "source_page": str,
+                "dead_url": str,
+                "old_url": str,
+                "new_url": str,
+                "status": str,
+                "connector": str,
+                "dry_run": int,
+                "message": str,
+                "applied_at": str,
+            },
+            pk="id",
+            if_not_exists=True,
+        )
 
         self._ensure_column("dead_links", "run_id", "INTEGER")
         self._ensure_column("replacement_suggestions", "run_id", "INTEGER")
@@ -583,3 +601,184 @@ class DeadLinkDatabase:
         columns = [col[0] for col in cursor.description]
         rows = cursor.fetchall()
         return [dict(zip(columns, row)) for row in rows]
+
+    def get_approved_reviewer_decisions(
+        self,
+        run_id: int,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, object]]:
+        query = """
+        SELECT *
+        FROM reviewer_decisions
+        WHERE run_id = ? AND decision = 'approved'
+        ORDER BY decided_at DESC, id DESC
+        """
+        params: List[object] = [run_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self.db.conn.execute(query, tuple(params)).fetchall()
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(reviewer_decisions)").fetchall()]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def upsert_applied_replacement(
+        self,
+        run_id: int,
+        suggestion_id: int,
+        source_page: str,
+        dead_url: str,
+        old_url: str,
+        new_url: str,
+        status: str,
+        connector: str,
+        dry_run: bool,
+        message: str,
+    ) -> None:
+        existing = self.db.conn.execute(
+            """
+            SELECT id
+            FROM applied_replacements
+            WHERE run_id = ? AND suggestion_id = ?
+            LIMIT 1
+            """,
+            (run_id, suggestion_id),
+        ).fetchone()
+
+        applied_at = datetime.now(timezone.utc).isoformat()
+        if existing is not None:
+            self.db.conn.execute(
+                """
+                UPDATE applied_replacements
+                SET source_page = ?,
+                    dead_url = ?,
+                    old_url = ?,
+                    new_url = ?,
+                    status = ?,
+                    connector = ?,
+                    dry_run = ?,
+                    message = ?,
+                    applied_at = ?
+                WHERE id = ?
+                """,
+                (
+                    source_page,
+                    dead_url,
+                    old_url,
+                    new_url,
+                    status,
+                    connector,
+                    1 if dry_run else 0,
+                    message,
+                    applied_at,
+                    existing[0],
+                ),
+            )
+            self.db.conn.commit()
+            return
+
+        self.db["applied_replacements"].insert(
+            {
+                "run_id": run_id,
+                "suggestion_id": suggestion_id,
+                "source_page": source_page,
+                "dead_url": dead_url,
+                "old_url": old_url,
+                "new_url": new_url,
+                "status": status,
+                "connector": connector,
+                "dry_run": 1 if dry_run else 0,
+                "message": message,
+                "applied_at": applied_at,
+            }
+        )
+
+    def get_applied_replacements(
+        self,
+        run_id: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, object]]:
+        query = "SELECT * FROM applied_replacements"
+        params: List[object] = []
+        if run_id is not None:
+            query += " WHERE run_id = ?"
+            params.append(run_id)
+        query += " ORDER BY applied_at DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self.db.conn.execute(query, tuple(params)).fetchall()
+        columns = [col[1] for col in self.db.conn.execute("PRAGMA table_info(applied_replacements)").fetchall()]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def apply_approved_replacements(
+        self,
+        run_id: int,
+        dry_run: bool = True,
+        connector: str = "none",
+        limit: Optional[int] = None,
+    ) -> Dict[str, int]:
+        decisions = self.get_approved_reviewer_decisions(run_id=run_id, limit=limit)
+        summary = {
+            "processed": 0,
+            "dry_run": 0,
+            "applied": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        for decision in decisions:
+            suggestion_id = int(decision.get("suggestion_id", 0) or 0)
+            suggestion = self.get_replacement_suggestion_by_id(suggestion_id=suggestion_id, run_id=run_id)
+            if suggestion is None:
+                summary["processed"] += 1
+                summary["failed"] += 1
+                self.upsert_applied_replacement(
+                    run_id=run_id,
+                    suggestion_id=suggestion_id,
+                    source_page="",
+                    dead_url=str(decision.get("dead_url", "")),
+                    old_url=str(decision.get("dead_url", "")),
+                    new_url=str(decision.get("final_suggested_url", "")),
+                    status="failed",
+                    connector=connector,
+                    dry_run=dry_run,
+                    message="Suggestion not found for approved decision.",
+                )
+                continue
+
+            source_page = str(suggestion.get("source_page", ""))
+            dead_url = str(suggestion.get("dead_url", ""))
+            old_url = dead_url
+            new_url = str(decision.get("final_suggested_url", "") or suggestion.get("suggested_url", ""))
+
+            summary["processed"] += 1
+            if dry_run:
+                summary["dry_run"] += 1
+                self.upsert_applied_replacement(
+                    run_id=run_id,
+                    suggestion_id=suggestion_id,
+                    source_page=source_page,
+                    dead_url=dead_url,
+                    old_url=old_url,
+                    new_url=new_url,
+                    status="dry_run",
+                    connector=connector,
+                    dry_run=True,
+                    message="Validated approved replacement. No write operation performed.",
+                )
+                continue
+
+            summary["skipped"] += 1
+            self.upsert_applied_replacement(
+                run_id=run_id,
+                suggestion_id=suggestion_id,
+                source_page=source_page,
+                dead_url=dead_url,
+                old_url=old_url,
+                new_url=new_url,
+                status="skipped_no_connector",
+                connector=connector,
+                dry_run=False,
+                message="No production connector configured. Configure CMS/Git connector to apply.",
+            )
+
+        return summary

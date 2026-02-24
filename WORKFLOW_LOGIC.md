@@ -49,6 +49,26 @@
   - final URL (edited override)
 - Stores in SQLite (`reviewer_decisions` table).
 
+### Apply Approved (Execution Logging)
+- Approved decisions can be executed in `dry-run` mode.
+- Each execution attempt is logged in `applied_replacements` with:
+  - old URL
+  - new URL
+  - status
+  - timestamp
+
+### What Is a Connector?
+- A connector is the integration layer that writes approved URL updates to your real content system.
+- Examples:
+  - WordPress API connector
+  - Contentful API connector
+  - Git/file connector (Markdown/HTML)
+  - App database connector
+- Current app behavior:
+  - connector is `none`
+  - apply step logs actions only (`dry_run` or `skipped_no_connector`)
+  - no production content is mutated yet
+
 ## Run Isolation Logic (`run_id`)
 
 - Every crawl creates a new `run_id` in `crawl_runs`.
@@ -65,7 +85,8 @@
 2. `replace` reads that run’s dead links and writes `replacement_suggestions`.
 3. `classify` reads that run’s suggestions and writes `replacement_classifications`.
 4. Reviewer decisions are captured per suggestion in `reviewer_decisions`.
-5. UI/API results show dead links, suggestions, classifications, and reviewer decisions for one run.
+5. Optional apply step logs approved execution attempts in `applied_replacements`.
+6. UI/API results show dead links, suggestions, classifications, reviewer decisions, and apply logs for one run.
 
 ## Core Tables
 
@@ -77,6 +98,10 @@
   - `id`, `run_id`, `source_page`, `dead_url`, `anchor_text`, `suggested_url`, `wayback_snapshot_url`, `similarity_score`, `match_reason`, `generated_at`
 - `replacement_classifications`
   - `id`, `run_id`, `suggestion_id`, `dead_url`, `suggested_url`, `similarity_score`, `confidence_score`, `decision`, `rationale`, `classified_at`
+- `reviewer_decisions`
+  - `id`, `run_id`, `suggestion_id`, `dead_url`, `original_suggested_url`, `final_suggested_url`, `decision`, `reviewer_name`, `note`, `decided_at`
+- `applied_replacements`
+  - `id`, `run_id`, `suggestion_id`, `source_page`, `dead_url`, `old_url`, `new_url`, `status`, `connector`, `dry_run`, `message`, `applied_at`
 
 ## Commands (CLI)
 
@@ -84,6 +109,7 @@
 python main.py crawl https://wiby.me
 python main.py replace --top-k 5 --min-similarity 0.05
 python main.py classify --auto-threshold 0.75
+python main.py apply-approved --dry-run
 ```
 
 Optional explicit run scoping:
@@ -98,6 +124,8 @@ python main.py classify --run-id 3 --auto-threshold 0.75
 - `POST /api/crawl`
 - `POST /api/replace`
 - `POST /api/classify`
+- `POST /api/review/decision`
+- `POST /api/apply-approved`
 - `GET /api/results?run_id=<id>`
 
 ## Example (End-to-End)

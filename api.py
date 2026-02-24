@@ -45,6 +45,14 @@ class ReviewDecisionRequest(BaseModel):
     db_path: str = "dead_links.db"
 
 
+class ApplyApprovedRequest(BaseModel):
+    run_id: int = 0
+    dry_run: bool = True
+    connector: str = "none"
+    limit: int = Field(default=500, ge=1)
+    db_path: str = "dead_links.db"
+
+
 app = FastAPI(title="Self-Healing Links API")
 app.mount("/web", StaticFiles(directory="web"), name="web")
 
@@ -73,6 +81,10 @@ def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, An
         run_id=resolved_run_id if resolved_run_id > 0 else None,
         limit=500,
     )
+    applied_replacements = database.get_applied_replacements(
+        run_id=resolved_run_id if resolved_run_id > 0 else None,
+        limit=500,
+    )
 
     return {
         "run_id": resolved_run_id,
@@ -86,11 +98,17 @@ def get_results(db_path: str = "dead_links.db", run_id: int = 0) -> Dict[str, An
             "review_approved": sum(1 for row in reviewer_decisions if row.get("decision") == "approved"),
             "review_rejected": sum(1 for row in reviewer_decisions if row.get("decision") == "rejected"),
             "review_edited": sum(1 for row in reviewer_decisions if row.get("decision") == "edited"),
+            "apply_processed": sum(1 for _ in applied_replacements),
+            "apply_dry_run": sum(1 for row in applied_replacements if row.get("status") == "dry_run"),
+            "apply_applied": sum(1 for row in applied_replacements if row.get("status") == "applied"),
+            "apply_skipped": sum(1 for row in applied_replacements if str(row.get("status", "")).startswith("skipped")),
+            "apply_failed": sum(1 for row in applied_replacements if row.get("status") == "failed"),
         },
         "dead_links": dead_links,
         "replacement_suggestions": suggestions,
         "replacement_classifications": classifications,
         "reviewer_decisions": reviewer_decisions,
+        "applied_replacements": applied_replacements,
     }
 
 
@@ -273,4 +291,28 @@ def save_review_decision(payload: ReviewDecisionRequest) -> Dict[str, Any]:
         "suggestion_id": suggestion_id,
         "decision": decision,
         "record": saved,
+    }
+
+
+@app.post("/api/apply-approved")
+def apply_approved(payload: ApplyApprovedRequest) -> Dict[str, Any]:
+    database = DeadLinkDatabase(db_path=payload.db_path)
+    resolved_run_id = payload.run_id if payload.run_id > 0 else (database.latest_run_id() or 0)
+    if resolved_run_id <= 0:
+        raise HTTPException(status_code=400, detail="No run found. Run crawl first.")
+
+    summary = database.apply_approved_replacements(
+        run_id=resolved_run_id,
+        dry_run=payload.dry_run,
+        connector=payload.connector.strip() or "none",
+        limit=payload.limit,
+    )
+    applied_replacements = database.get_applied_replacements(run_id=resolved_run_id, limit=500)
+    return {
+        "message": "apply_approved_complete",
+        "run_id": resolved_run_id,
+        "dry_run": payload.dry_run,
+        "connector": payload.connector.strip() or "none",
+        "summary": summary,
+        "applied_replacements": applied_replacements,
     }
