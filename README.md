@@ -32,6 +32,7 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 ## Connector (Simple)
 - A connector is the bridge to your real content system (CMS/files/database).
 - Examples: WordPress API, Contentful API, Git/file updater.
+- `files` connector updates local `.html`, `.htm`, `.md`, `.txt` files.
 - Current default is `none`, so apply step logs actions but does not edit production content.
 
 ## Usage
@@ -41,6 +42,9 @@ An ML-powered tool that automatically detects and replaces broken URLs (404s) on
 - python main.py replace --top-k 5 --min-similarity 0.01
 - python main.py classify --auto-threshold 0.75
 - python main.py apply-approved --dry-run
+- python main.py apply-approved --connector files --files-root . --dry-run
+- python main.py apply-approved --connector files --files-root . --live
+- python main.py validate
 
 Run isolation:
 - Each crawl creates a `run_id`.
@@ -54,7 +58,7 @@ Run isolation:
 - Use the UI buttons to run Stage 1, Stage 2, and Stage 3.
 - Explainability: click any row in Replacement Suggestions or Classifications to open feature contributions and token/path match details.
 - Reviewer decisions: after selecting a row, use Approve/Reject/Edit in the Explainability Panel.
-- Apply approved (dry-run): use the `Apply Approved (Dry Run)` button to generate execution logs.
+- Apply approved: choose connector/files root, then use `Apply Approved (Dry Run)` or `Apply Approved (Live)`.
 
 ## Coming Soon
 - Model training pipeline from labeled replacement decisions

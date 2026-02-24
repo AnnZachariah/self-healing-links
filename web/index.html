@@ -187,7 +187,12 @@
         <label>Auto threshold</label>
         <input id="classify-threshold" type="number" value="0.75" min="0" max="1" step="0.01" />
         <button id="btn-classify">Run Classify</button>
+        <label>Apply connector</label>
+        <input id="apply-connector" value="none" placeholder="none or files" />
+        <label>Files root (for files connector)</label>
+        <input id="apply-files-root" value="." placeholder="." />
         <button id="btn-apply-approved" class="secondary">Apply Approved (Dry Run)</button>
+        <button id="btn-apply-approved-live" class="secondary">Apply Approved (Live)</button>
       </div>
     </div>
 
@@ -510,15 +515,30 @@
       setStatus(`Classify complete (run ${currentRunId}). Auto: ${data.auto_replace}, Manual: ${data.manual_review}. Click Show Results.`, "ok");
     }));
 
-    document.getElementById("btn-apply-approved").addEventListener("click", () => withBusy("btn-apply-approved", async () => {
-      setStatus("Applying approved replacements (dry run)...", "muted");
-      const data = await postJSON("/api/apply-approved", { run_id: currentRunId, dry_run: true, connector: "none" });
+    const runApplyApproved = async (dryRun) => {
+      const connector = document.getElementById("apply-connector").value.trim() || "none";
+      const files_root = document.getElementById("apply-files-root").value.trim() || ".";
+      setStatus(`Applying approved replacements (${dryRun ? "dry run" : "live"})...`, "muted");
+      const data = await postJSON("/api/apply-approved", {
+        run_id: currentRunId,
+        dry_run: dryRun,
+        connector,
+        files_root
+      });
       currentRunId = Number(data.run_id || currentRunId || 0);
       setStatus(
-        `Apply complete (dry run). Processed: ${data.summary.processed}, Dry-run logged: ${data.summary.dry_run}, Failed: ${data.summary.failed}.`,
+        `Apply complete (${dryRun ? "dry run" : "live"}). Processed: ${data.summary.processed}, Applied: ${data.summary.applied}, Dry-run: ${data.summary.dry_run}, Failed: ${data.summary.failed}.`,
         "ok"
       );
       await fetchResults();
+    };
+
+    document.getElementById("btn-apply-approved").addEventListener("click", () => withBusy("btn-apply-approved", async () => {
+      await runApplyApproved(true);
+    }));
+
+    document.getElementById("btn-apply-approved-live").addEventListener("click", () => withBusy("btn-apply-approved-live", async () => {
+      await runApplyApproved(false);
     }));
 
     document.getElementById("btn-refresh").addEventListener("click", async () => {

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Union
+from typing import List, Tuple, Union
 
 import typer
 from rich.console import Console
@@ -10,6 +10,7 @@ from crawler import LinkCrawler
 from database import DeadLinkDatabase
 from classifier import SelfHealingClassifier
 from replacement_engine import ReplacementEngine
+from apply_engine import ApplyEngine
 
 app = typer.Typer(help="Self-healing link verification crawler.", no_args_is_help=True)
 console = Console()
@@ -237,7 +238,14 @@ def apply_approved(
         "--dry-run/--live",
         help="Dry-run logs intended changes without production writes.",
     ),
-    connector: str = typer.Option("none", help="Connector name for logging (e.g. contentful, git)"),
+    connector: str = typer.Option(
+        "none",
+        help="Connector: none|files (files updates local HTML/MD/TXT content)",
+    ),
+    files_root: str = typer.Option(
+        ".",
+        help="Root folder used by --connector files",
+    ),
     limit: int = typer.Option(500, min=1, help="Maximum approved decisions to process"),
 ) -> None:
     """Apply approved reviewer decisions (step 1: execution logging)."""
@@ -247,11 +255,13 @@ def apply_approved(
         console.print("[yellow]No run found. Run crawl first.[/yellow]")
         raise typer.Exit(code=0)
 
-    summary = database.apply_approved_replacements(
+    engine = ApplyEngine(database=database)
+    summary = engine.apply_approved(
         run_id=resolved_run_id,
         dry_run=dry_run,
         connector=connector,
         limit=limit,
+        files_root=files_root,
     )
     console.print("\n[green]Done.[/green] Approved replacement execution complete.")
     console.print(f"Run ID: {resolved_run_id}")
@@ -261,6 +271,135 @@ def apply_approved(
     console.print(f"Applied: {summary['applied']}")
     console.print(f"Skipped: {summary['skipped']}")
     console.print(f"Failed: {summary['failed']}")
+
+
+@app.command("validate")
+def validate(
+    db_path: str = typer.Option("dead_links.db", help="SQLite database path"),
+    run_id: int = typer.Option(0, help="Run ID to validate (0 means latest run)"),
+) -> None:
+    """Validate pipeline data integrity for a run (PASS/WARN/FAIL)."""
+    database = DeadLinkDatabase(db_path=db_path)
+    resolved_run_id = run_id if run_id > 0 else (database.latest_run_id() or 0)
+    checks: List[Tuple[str, str, str]] = []
+
+    def add_check(name: str, status: str, detail: str) -> None:
+        checks.append((name, status, detail))
+
+    if resolved_run_id <= 0:
+        add_check("Run exists", "FAIL", "No run found in crawl_runs.")
+    else:
+        row = database.db.conn.execute(
+            "SELECT target, started_at FROM crawl_runs WHERE id = ? LIMIT 1",
+            (resolved_run_id,),
+        ).fetchone()
+        if row is None:
+            add_check("Run exists", "FAIL", f"Run ID {resolved_run_id} not found in crawl_runs.")
+        else:
+            add_check("Run exists", "PASS", f"run_id={resolved_run_id}, target={row[0]}")
+
+    if resolved_run_id > 0:
+        dead_count = database.db.conn.execute(
+            "SELECT COUNT(*) FROM dead_links WHERE run_id = ?",
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Dead links",
+            "PASS" if dead_count > 0 else "WARN",
+            f"Rows in dead_links for run {resolved_run_id}: {dead_count}",
+        )
+
+        suggestion_count = database.db.conn.execute(
+            "SELECT COUNT(*) FROM replacement_suggestions WHERE run_id = ?",
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Replacement suggestions",
+            "PASS" if suggestion_count > 0 else "WARN",
+            f"Rows in replacement_suggestions: {suggestion_count}",
+        )
+
+        classification_count = database.db.conn.execute(
+            "SELECT COUNT(*) FROM replacement_classifications WHERE run_id = ?",
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Classifications",
+            "PASS" if classification_count > 0 else "WARN",
+            f"Rows in replacement_classifications: {classification_count}",
+        )
+
+        invalid_classification_links = database.db.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM replacement_classifications rc
+            LEFT JOIN replacement_suggestions rs ON rs.id = rc.suggestion_id
+            WHERE rc.run_id = ?
+              AND (rs.id IS NULL OR rs.run_id != rc.run_id)
+            """,
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Classification linkage",
+            "PASS" if invalid_classification_links == 0 else "FAIL",
+            f"Classifications with missing/mismatched suggestion rows: {invalid_classification_links}",
+        )
+
+        invalid_decisions = database.db.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM replacement_classifications
+            WHERE run_id = ?
+              AND decision NOT IN ('auto_replace', 'manual_review')
+            """,
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Classification decision values",
+            "PASS" if invalid_decisions == 0 else "FAIL",
+            f"Invalid decision rows: {invalid_decisions}",
+        )
+
+        invalid_reviewer_links = database.db.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reviewer_decisions rd
+            LEFT JOIN replacement_suggestions rs ON rs.id = rd.suggestion_id
+            WHERE rd.run_id = ?
+              AND (rs.id IS NULL OR rs.run_id != rd.run_id)
+            """,
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Reviewer decision linkage",
+            "PASS" if invalid_reviewer_links == 0 else "FAIL",
+            f"Reviewer decisions with invalid suggestion_id/run_id: {invalid_reviewer_links}",
+        )
+
+        apply_logs = database.db.conn.execute(
+            "SELECT COUNT(*) FROM applied_replacements WHERE run_id = ?",
+            (resolved_run_id,),
+        ).fetchone()[0]
+        add_check(
+            "Applied replacement logs",
+            "PASS" if apply_logs > 0 else "WARN",
+            f"Rows in applied_replacements: {apply_logs}",
+        )
+
+    table = Table(title="Validation Report")
+    table.add_column("Check", style="cyan", overflow="fold")
+    table.add_column("Status", style="magenta")
+    table.add_column("Details", style="white", overflow="fold")
+    for name, status, detail in checks:
+        color = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}.get(status, "white")
+        table.add_row(name, f"[{color}]{status}[/{color}]", detail)
+    console.print(table)
+
+    fail_count = sum(1 for _, status, _ in checks if status == "FAIL")
+    warn_count = sum(1 for _, status, _ in checks if status == "WARN")
+    console.print(f"Summary: FAIL={fail_count}, WARN={warn_count}, CHECKS={len(checks)}")
+    if fail_count > 0:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

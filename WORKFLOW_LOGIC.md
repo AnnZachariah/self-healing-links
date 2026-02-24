@@ -65,9 +65,9 @@
   - Git/file connector (Markdown/HTML)
   - App database connector
 - Current app behavior:
-  - connector is `none`
-  - apply step logs actions only (`dry_run` or `skipped_no_connector`)
-  - no production content is mutated yet
+  - `none`: apply step logs only (`dry_run` or `skipped_no_connector`)
+  - `files`: apply step can update local `.html/.htm/.md/.txt` files under `files_root`
+  - live writes create backups in `.apply_backups/`
 
 ## Run Isolation Logic (`run_id`)
 
@@ -110,6 +110,8 @@ python main.py crawl https://wiby.me
 python main.py replace --top-k 5 --min-similarity 0.05
 python main.py classify --auto-threshold 0.75
 python main.py apply-approved --dry-run
+python main.py apply-approved --connector files --files-root . --dry-run
+python main.py apply-approved --connector files --files-root . --live
 ```
 
 Optional explicit run scoping:

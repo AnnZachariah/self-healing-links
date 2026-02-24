@@ -9,6 +9,7 @@ from classifier import SelfHealingClassifier
 from crawler import LinkCrawler
 from database import DeadLinkDatabase
 from replacement_engine import ReplacementEngine
+from apply_engine import ApplyEngine
 
 
 class CrawlRequest(BaseModel):
@@ -49,6 +50,7 @@ class ApplyApprovedRequest(BaseModel):
     run_id: int = 0
     dry_run: bool = True
     connector: str = "none"
+    files_root: str = "."
     limit: int = Field(default=500, ge=1)
     db_path: str = "dead_links.db"
 
@@ -301,11 +303,13 @@ def apply_approved(payload: ApplyApprovedRequest) -> Dict[str, Any]:
     if resolved_run_id <= 0:
         raise HTTPException(status_code=400, detail="No run found. Run crawl first.")
 
-    summary = database.apply_approved_replacements(
+    engine = ApplyEngine(database=database)
+    summary = engine.apply_approved(
         run_id=resolved_run_id,
         dry_run=payload.dry_run,
         connector=payload.connector.strip() or "none",
         limit=payload.limit,
+        files_root=payload.files_root or ".",
     )
     applied_replacements = database.get_applied_replacements(run_id=resolved_run_id, limit=500)
     return {
@@ -313,6 +317,7 @@ def apply_approved(payload: ApplyApprovedRequest) -> Dict[str, Any]:
         "run_id": resolved_run_id,
         "dry_run": payload.dry_run,
         "connector": payload.connector.strip() or "none",
+        "files_root": payload.files_root or ".",
         "summary": summary,
         "applied_replacements": applied_replacements,
     }
